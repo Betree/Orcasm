@@ -258,3 +258,42 @@ func TestAddReusesExistingKey(t *testing.T) {
 		t.Errorf("expected the same key authorized twice, got %q", m.authorized)
 	}
 }
+
+// sshResolve is what ssh would use to reach host when run as cmd (no
+// connection is made).
+func sshResolve(t *testing.T, cmd, host string) string {
+	t.Helper()
+	out, err := exec.Command("sh", "-c", cmd+` -G "$0"`, host).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s -G %s: %v\n%s", cmd, host, err, out)
+	}
+	return string(out)
+}
+
+// The host git remote must reach Sandboxes without the Include in
+// ~/.ssh/config, and leave the user's other hosts (e.g. origin) as they were.
+func TestGitSSHCommandReachesSandboxesAndTheUsersOwnHosts(t *testing.T) {
+	a, _ := newAccess(t)
+	if err := os.MkdirAll(a.UserSSHDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	userConfig := "Host work\n  HostName code.example.com\n  User me\n"
+	if err := os.WriteFile(filepath.Join(a.UserSSHDir, "config"), []byte(userConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Add(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := a.GitSSHCommand()
+
+	if got := sshResolve(t, cmd, "orcasm-demo"); !strings.Contains(got, "proxycommand msb ssh serve demo --stdio") || !strings.Contains(got, "user dev") {
+		t.Errorf("orcasm-demo does not go through msb:\n%s", got)
+	}
+	if got := sshResolve(t, cmd, "work"); !strings.Contains(got, "hostname code.example.com") || !strings.Contains(got, "user me") {
+		t.Errorf("the user's own host lost its settings:\n%s", got)
+	}
+	if linked, _ := a.UserConfigLinked(); linked {
+		t.Error("~/.ssh/config was linked without consent")
+	}
+}
