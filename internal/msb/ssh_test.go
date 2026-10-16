@@ -1,6 +1,7 @@
 package msb_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,7 +58,7 @@ func TestAuthorizeSSHKeyWithRealMSB(t *testing.T) {
 	pub := keygen(t, key)
 	c := msb.CLI{Home: home}
 	for range 2 { // idempotent
-		if err := c.AuthorizeSSHKey(key + ".pub"); err != nil {
+		if err := c.AuthorizeSSHKey(context.Background(), key+".pub"); err != nil {
 			t.Fatal(err)
 		}
 	}

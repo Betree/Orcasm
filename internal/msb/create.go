@@ -1,12 +1,8 @@
 package msb
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 )
@@ -14,10 +10,9 @@ import (
 // CreateOptions describes a sandbox for `msb create`. The sandbox boots
 // detached with `--init auto`, so images with systemd run it as PID 1.
 type CreateOptions struct {
-	Image string
-	Name  string
-	// Labels are "KEY=VALUE" strings.
-	Labels      []string
+	Image       string
+	Name        string
+	Labels      []Label
 	CPUs        int
 	MemoryGiB   int
 	RootDiskGiB int
@@ -71,7 +66,7 @@ func (o CreateOptions) Args() []string {
 		args = append(args, "--root-disk", fmt.Sprintf("%dG", o.RootDiskGiB))
 	}
 	for _, l := range o.Labels {
-		args = append(args, "--label", l)
+		args = append(args, "--label", l.String())
 	}
 	for _, d := range o.OwnedDisks {
 		args = append(args, "--mount-owned", fmt.Sprintf("%s:kind=disk,size=%dG", d.Path, d.SizeGiB))
@@ -96,45 +91,5 @@ func (o CreateOptions) Args() []string {
 
 // Create creates and boots the sandbox (`msb create`).
 func (c CLI) Create(ctx context.Context, opts CreateOptions) error {
-	var env []string
-	for _, sec := range opts.Secrets {
-		env = append(env, sec.Name+"="+sec.Value)
-	}
-	return c.stream(ctx, io.Discard, env, opts.Args()...)
-}
-
-// ExecTo runs argv in sandbox name as user ("" means root) with no stdin,
-// streaming its stdout to out. A non-zero exit becomes an error carrying
-// stderr.
-func (c CLI) ExecTo(ctx context.Context, name, user string, out io.Writer, argv ...string) error {
-	args := []string{"exec", "--quiet", "--no-stdin"}
-	if user != "" {
-		args = append(args, "--user", user)
-	}
-	return c.stream(ctx, out, nil, append(append(args, name, "--"), argv...)...)
-}
-
-// stream runs msb with extra environment variables env, streaming stdout.
-func (c CLI) stream(ctx context.Context, out io.Writer, env []string, args ...string) error {
-	cmd := exec.CommandContext(ctx, "msb", args...)
-	if c.Home != "" {
-		env = append(env, "MSB_HOME="+c.Home)
-	}
-	if len(env) > 0 {
-		cmd.Env = append(os.Environ(), env...)
-	}
-	var stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = out, &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("msb %s: %w: %s", args[0], err, lastLines(stderr.String(), 20))
-	}
-	return nil
-}
-
-func lastLines(s string, n int) string {
-	lines := strings.Split(strings.TrimSpace(s), "\n")
-	if len(lines) > n {
-		lines = lines[len(lines)-n:]
-	}
-	return strings.Join(lines, "\n")
+	return c.run(ctx, call{args: opts.Args(), secrets: opts.Secrets})
 }

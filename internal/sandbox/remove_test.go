@@ -50,7 +50,7 @@ func project(t *testing.T) (host, main string, f *fakeMSB, ssh *fakeSSH) {
 		t.Fatal(err)
 	}
 	f = newFakeMSB()
-	f.add("app", msb.Running, sandbox.CreateLabels(host, main)...)
+	f.add("app", msb.Running, labelStrings(sandbox.CreateLabels(host, main))...)
 	return host, main, f, &fakeSSH{}
 }
 

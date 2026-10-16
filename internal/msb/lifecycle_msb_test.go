@@ -24,9 +24,9 @@ func testSandbox(t *testing.T) string {
 	return name
 }
 
-func status(t *testing.T, c msb.CLI, name string) string {
+func status(t *testing.T, c msb.CLI, name string) msb.Status {
 	t.Helper()
-	list, err := c.List(context.Background(), "orcasm-test=1")
+	list, err := c.List(context.Background(), msb.Label{Key: "orcasm-test", Value: "1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestLifecycleWithRealMSB(t *testing.T) {
 }
 
 func TestListWithUnmatchedLabelIsEmpty(t *testing.T) {
-	list, err := msb.CLI{}.List(context.Background(), "orcasm-test=no-such-value")
+	list, err := msb.CLI{}.List(context.Background(), msb.Label{Key: "orcasm-test", Value: "no-such-value"})
 	if err != nil {
 		t.Fatal(err)
 	}

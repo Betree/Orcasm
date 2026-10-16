@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/repository"
 )
 
@@ -66,19 +67,9 @@ func (m Manager) unsavedWork(ctx context.Context, s Sandbox) []string {
 	if s.Main == "" {
 		return []string{"Main's location is unknown, so unsaved work cannot be checked"}
 	}
-	work, err := repository.UnsavedWork(ctx, guest{m.MSB, s.Name}, s.Main, s.Folder)
+	work, err := repository.UnsavedWork(ctx, msb.Sandbox{Name: s.Name, MSB: m.MSB}, s.Main, s.Folder)
 	if err != nil {
 		return []string{"could not check for unsaved work: " + err.Error()}
 	}
 	return work
-}
-
-// guest runs commands in one Sandbox.
-type guest struct {
-	msb  MSB
-	name string
-}
-
-func (g guest) Exec(ctx context.Context, user string, argv ...string) (string, error) {
-	return g.msb.Exec(ctx, g.name, user, argv...)
 }

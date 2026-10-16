@@ -1,6 +1,7 @@
 package sshaccess_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ type fakeMSB struct {
 	hostKeys   map[string]string
 }
 
-func (f *fakeMSB) AuthorizeSSHKey(pubKeyFile string) error {
+func (f *fakeMSB) AuthorizeSSHKey(_ context.Context, pubKeyFile string) error {
 	b, err := os.ReadFile(pubKeyFile)
 	if err != nil {
 		return err
@@ -58,7 +59,7 @@ func read(t *testing.T, path string) string {
 
 func TestAddWritesHostEntryForSandbox(t *testing.T) {
 	a, _ := newAccess(t)
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
 	cfg := read(t, filepath.Join(a.Dir, "config"))
@@ -80,7 +81,7 @@ func TestAddWritesHostEntryForSandbox(t *testing.T) {
 
 func TestAddGeneratesOrcasmKeyAndAuthorizesItInMSB(t *testing.T) {
 	a, m := newAccess(t)
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
 	pub := strings.TrimSpace(read(t, filepath.Join(a.Dir, "id_ed25519.pub")))
@@ -103,14 +104,14 @@ func TestAddPinsSandboxHostKeyAndRefreshesItOnReAdd(t *testing.T) {
 	a, m := newAccess(t)
 	m.hostKeys["demo"] = "ssh-ed25519 OLDKEY"
 	m.hostKeys["other"] = "ssh-ed25519 OTHERKEY"
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Add("other"); err != nil {
+	if err := a.Add(context.Background(), "other"); err != nil {
 		t.Fatal(err)
 	}
 	m.hostKeys["demo"] = "ssh-ed25519 NEWKEY"
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
 	got := read(t, filepath.Join(a.Dir, "known_hosts"))
@@ -128,7 +129,7 @@ func TestRemoveDropsOnlyThatSandboxEntry(t *testing.T) {
 	m.hostKeys["demo"] = "ssh-ed25519 DEMOKEY"
 	m.hostKeys["other"] = "ssh-ed25519 OTHERKEY"
 	for _, n := range []string{"demo", "other"} {
-		if err := a.Add(n); err != nil {
+		if err := a.Add(context.Background(), n); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -227,7 +228,7 @@ func TestLinkUserConfigCreatesMissingConfig(t *testing.T) {
 
 func TestCommandReachesTheSandboxWithoutTheUserConfig(t *testing.T) {
 	a, _ := newAccess(t)
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,10 +248,10 @@ func TestCommandReachesTheSandboxWithoutTheUserConfig(t *testing.T) {
 
 func TestAddReusesExistingKey(t *testing.T) {
 	a, m := newAccess(t)
-	if err := a.Add("one"); err != nil {
+	if err := a.Add(context.Background(), "one"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Add("two"); err != nil {
+	if err := a.Add(context.Background(), "two"); err != nil {
 		t.Fatal(err)
 	}
 	if len(m.authorized) != 2 || m.authorized[0] != m.authorized[1] {

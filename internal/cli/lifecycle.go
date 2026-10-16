@@ -42,14 +42,14 @@ func newManager() (sandbox.Manager, error) {
 	if err != nil {
 		return sandbox.Manager{}, err
 	}
-	startEnv := func(_ context.Context, name string) ([]string, error) {
+	startSecrets := func(_ context.Context, name string) ([]msb.Secret, error) {
 		host, err := wizard.NewHost()
 		if err != nil {
 			return nil, err
 		}
-		return sandbox.SecretEnv(dir, name, host.SecretValue)
+		return sandbox.Secrets(dir, name, host.SecretValue)
 	}
-	return sandbox.Manager{MSB: msb.CLI{}, SSH: ssh, ConfigDir: dir, StartEnv: startEnv}, nil
+	return sandbox.Manager{MSB: msb.CLI{}, SSH: ssh, ConfigDir: dir, StartSecrets: startSecrets}, nil
 }
 
 // sandboxArg is the Sandbox named in args or, without one, the current
@@ -126,7 +126,7 @@ func printSandboxes(out io.Writer, sbs []sandbox.Sandbox) {
 	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
 	fmt.Fprintln(w, "NAME\tSTATUS\tFOLDER")
 	for _, s := range sbs {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, strings.ToLower(s.Status), s.Folder)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, strings.ToLower(string(s.Status)), s.Folder)
 	}
 	w.Flush()
 }

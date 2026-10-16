@@ -10,6 +10,7 @@ package sshaccess
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,7 +22,7 @@ import (
 type MSB interface {
 	// AuthorizeSSHKey adds the public key in pubKeyFile to msb's global
 	// authorized_keys. It must be idempotent.
-	AuthorizeSSHKey(pubKeyFile string) error
+	AuthorizeSSHKey(ctx context.Context, pubKeyFile string) error
 	// SandboxHostKey returns the sandbox's SSH host public key
 	// ("<type> <base64>").
 	SandboxHostKey(name string) (string, error)
@@ -72,14 +73,14 @@ func (a Access) knownHostsPath() string { return filepath.Join(a.Dir, "known_hos
 // key exists and is authorized in msb, records the Sandbox's host key, and
 // writes its Host entry to orcasm's ssh config. Calling it again refreshes
 // the entry (e.g. after the Sandbox was recreated with a new host key).
-func (a Access) Add(name string) error {
+func (a Access) Add(ctx context.Context, name string) error {
 	if err := os.MkdirAll(a.Dir, 0o700); err != nil {
 		return err
 	}
 	if err := a.ensureKey(); err != nil {
 		return err
 	}
-	if err := a.MSB.AuthorizeSSHKey(a.keyPath() + ".pub"); err != nil {
+	if err := a.MSB.AuthorizeSSHKey(ctx, a.keyPath()+".pub"); err != nil {
 		return fmt.Errorf("authorize orcasm key in msb: %w", err)
 	}
 	hostKey, err := a.MSB.SandboxHostKey(name)

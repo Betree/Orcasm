@@ -55,7 +55,7 @@ func TestProvisionARealSandbox(t *testing.T) {
 		t.Errorf("web UI on host port: %d %.200s", resp.StatusCode, body)
 	}
 
-	sb := msb.Sandbox{Name: name}
+	sb := msb.CLI{}.Sandbox(name)
 	checks := `pwd; stat -c %U "$PWD"; id -nG | tr ' ' '\n' | grep -x docker
 for c in git rsync curl gh claude codex opencode; do command -v $c >/dev/null || echo "missing $c"; done
 docker run --rm hello-world >/dev/null && echo docker-ok

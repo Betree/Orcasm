@@ -44,8 +44,8 @@ const (
 type CreateMSB interface {
 	Create(ctx context.Context, opts msb.CreateOptions) error
 	Remove(ctx context.Context, name string) error
-	List(ctx context.Context, labels ...string) ([]msb.Listing, error)
-	ExecTo(ctx context.Context, name, user string, out io.Writer, argv ...string) error
+	List(ctx context.Context, labels ...msb.Label) ([]msb.Listing, error)
+	ExecStreaming(ctx context.Context, name, user string, out io.Writer, argv ...string) error
 }
 
 //go:embed provision.sh
@@ -78,20 +78,16 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 		return fmt.Errorf("a sandbox named %s already exists", cfg.Name)
 	}
 	main := MainPath(cfg.Folder)
-	var secrets []msb.Secret
-	for _, s := range cfg.Secrets {
-		v, err := secretValue(s)
-		if err != nil {
-			return fmt.Errorf("secret %s: %w", s.Name, err)
-		}
-		secrets = append(secrets, msb.Secret{Name: s.Name, Hosts: s.Hosts, Value: v})
+	secrets, err := valued(cfg.Secrets, secretValue)
+	if err != nil {
+		return err
 	}
 	opts := msb.CreateOptions{
 		Image: Image,
 		Name:  cfg.Name,
 		Labels: append(CreateLabels(cfg.Folder, main),
-			LabelPort+"="+strconv.Itoa(cfg.HostPort),
-			LabelSchema+"="+strconv.Itoa(Schema)),
+			msb.Label{Key: LabelPort, Value: strconv.Itoa(cfg.HostPort)},
+			msb.Label{Key: LabelSchema, Value: strconv.Itoa(Schema)}),
 		CPUs:        cfg.Resources.CPUs,
 		MemoryGiB:   cfg.Resources.MemoryGiB,
 		RootDiskGiB: cfg.Resources.RootDiskGiB,
@@ -112,7 +108,7 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	argv := append([]string{"bash", "-c", provisionScript, "provision",
 		User, strconv.Itoa(cfg.HostPort), OrcaVersion, main, cfg.Git.Name, cfg.Git.Email},
 		cfg.Harnesses...)
-	if err := m.ExecTo(ctx, cfg.Name, "", out, argv...); err != nil {
+	if err := m.ExecStreaming(ctx, cfg.Name, "", out, argv...); err != nil {
 		return fmt.Errorf("provision Sandbox %s (kept for inspection; `msb rm --force %s` to discard): %w",
 			cfg.Name, cfg.Name, err)
 	}

@@ -63,7 +63,7 @@ git -c user.name=t -c user.email=t@t commit -q -m first && chown -R dev:dev /hom
 	if len(asked) != 2 || !strings.Contains(asked[0], "/home/dev/main: uncommitted") {
 		t.Errorf("asked = %q, want uncommitted changes then 1 commit", asked)
 	}
-	if list, _ := c.List(ctx, "orcasm=1"); len(list) > 0 {
+	if list, _ := c.List(ctx, msb.Label{Key: "orcasm", Value: "1"}); len(list) > 0 {
 		for _, l := range list {
 			if l.Name == name {
 				t.Error("sandbox still listed after Remove")
