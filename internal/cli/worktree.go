@@ -53,6 +53,9 @@ func newWorktreeCmd(BuildInfo) *cobra.Command {
 				}
 				fmt.Fprintf(cmd.OutOrStdout(), "Starting the Stack of %s in the background; log: %s\n",
 					worktree.Name(path), filepath.Join(h.StateDir(worktree.Name(path)), worktree.LogFile))
+				if h.Config.WebService != "" {
+					fmt.Fprintf(cmd.OutOrStdout(), "Its web app will be at http://%s/\n", stack.Hostname(worktree.Name(path)))
+				}
 				return nil
 			}),
 		hook("archive", "Tear down the Worktree's Stack (Orca archive hook)",

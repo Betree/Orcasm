@@ -25,6 +25,7 @@ import (
 	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/repository"
 	"github.com/Betree/Orcasm/internal/sandbox"
+	"github.com/Betree/Orcasm/internal/stack"
 	"github.com/Betree/Orcasm/internal/wizard"
 	"github.com/Betree/Orcasm/internal/worktree"
 )
@@ -119,6 +120,11 @@ func TestWorktreeHooksInARealSandbox(t *testing.T) {
 	}
 	if got := dev("docker port " + project + "-web-1 || true"); strings.TrimSpace(got) != "" {
 		t.Errorf("web publishes ports: %q", got)
+	}
+
+	// #20's proxy routes the Worktree's host name to its web service.
+	if got := dev("curl -s -o /dev/null -w '%{http_code}' http://" + stack.Hostname(wt) + "/"); got != "200" {
+		t.Errorf("http://%s/ answered %q", stack.Hostname(wt), got)
 	}
 
 	dev("orca-ide worktree rm --worktree path:" + path + " --run-hooks --json >/dev/null")
