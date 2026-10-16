@@ -171,6 +171,7 @@ Everything here comes from docs, help text or source. **Nothing in §1–10 was 
 - **cgroups:** not documented specifically. It works in the official guide and in `oc-dev`; the cgroup version and delegation details are unverified.
 - **Nested virtualization (KVM inside the sandbox):** not documented and assumed unavailable. Docker containers do not need it.
 - **Docker Compose:** not mentioned. It is just a client plugin, so it should work wherever dockerd works.
+- **Tested (#12):** Ubuntu 24.04's `docker.io` 29.1 with `docker-compose-v2` works on an owned disk at `/var/lib/docker`, but only with the containerd image store turned off. Docker 29 defaults to the containerd snapshotter, which keeps images under `/var/lib/containerd` on the overlay root, and `docker run` then fails with `overlay ... invalid argument`. Orcasm writes `{"features":{"containerd-snapshotter":false}}` to `/etc/docker/daemon.json`, so images use `overlay2` on the Docker disk.
 
 ## 9. SSH and exec
 
@@ -217,7 +218,8 @@ Tested 2026-10-16 on this host with msb 0.7.8, `ubuntu-systemd:24.04`, `--init a
 - **Shell:** msb ignores the passwd shell. Commands and interactive sessions use the sandbox's `--shell`, which defaults to `/bin/sh`.
 - **Working directory:** sessions start in the sandbox's `--workdir` (default `/`), not in `$HOME`.
 - **Environment:** `USER`, `LOGNAME` and `SHELL` are not set.
-- Both `--shell` and `--workdir` apply to `msb exec` and to SSH, for all users. `--workdir` can be changed later with `msb modify -w`. `--shell` is create-time only.
+- Both `--shell` and `--workdir` apply to `msb exec` and to SSH, for all users. `--workdir` can be changed later with `msb modify -w`, but only with a restart (`--restart` or `--next-start`). `--shell` is create-time only.
+- **The workdir must exist at boot (tested in #12).** Otherwise `msb create` fails with `handoff init cwd not found`. `--mkdir <path>` creates it before boot.
 
 **Host keys:**
 - Each sandbox has its own host key in `~/.microsandbox/sandboxes/<name>/ssh/host_ed25519` (an msb-internal path). The key survives stop/start and is regenerated when the sandbox is removed and recreated under the same name.

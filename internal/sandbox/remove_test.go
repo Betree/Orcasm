@@ -147,3 +147,21 @@ func TestRemoveRefusesWhenWorkCannotBeChecked(t *testing.T) {
 		t.Error("removed despite the refusal")
 	}
 }
+
+func TestRemoveForgetsTheKeptConfig(t *testing.T) {
+	_, _, f, ssh := project(t)
+	dir := t.TempDir()
+	cfg := demoConfig()
+	cfg.Name = "app"
+	if err := sandbox.SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	m := sandbox.Manager{MSB: f, SSH: ssh, ConfigDir: dir}
+
+	if err := m.Remove(context.Background(), "app", sandbox.RemoveOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sandbox.LoadConfig(dir, "app"); err == nil {
+		t.Error("Config still kept after Remove")
+	}
+}

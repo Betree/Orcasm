@@ -1,14 +1,76 @@
 package cli_test
 
 import (
+	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Betree/Orcasm/internal/cli"
+	"github.com/Betree/Orcasm/internal/sandbox"
+	"github.com/Betree/Orcasm/internal/wizard"
 )
+
+// TestMain makes sure no test boots a real Sandbox: tests running
+// `orcasm create` must call fakeProvision.
+func TestMain(m *testing.M) {
+	cli.SetProvision(func(context.Context, wizard.Config, sandbox.SecretValue, io.Writer) error {
+		return errors.New("test would provision a real Sandbox: call fakeProvision")
+	})
+	os.Exit(m.Run())
+}
+
+// fakeProvision records the Config `orcasm create` provisions.
+func fakeProvision(t *testing.T) *[]wizard.Config {
+	var got []wizard.Config
+	t.Cleanup(cli.SetProvision(func(_ context.Context, cfg wizard.Config, _ sandbox.SecretValue, _ io.Writer) error {
+		got = append(got, cfg)
+		return nil
+	}))
+	return &got
+}
+
+func TestCreateProvisionsTheSandboxFromTheWizardConfig(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	provisioned := fakeProvision(t)
+	project := filepath.Join(t.TempDir(), "demo")
+	if err := os.Mkdir(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	answers := filepath.Join(t.TempDir(), "answers.toml")
+	content := "folder = \"" + project + "\"\nname = \"orcasm-cli-test-sandbox\"\nhost_port = 16999\nharnesses = [\"codex\"]\n"
+	if err := os.WriteFile(answers, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := run(t, "create", "--answers", answers)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if len(*provisioned) != 1 {
+		t.Fatalf("want one Sandbox provisioned, got %d", len(*provisioned))
+	}
+	cfg := (*provisioned)[0]
+	if cfg.Name != "orcasm-cli-test-sandbox" || cfg.Folder != project || cfg.HostPort != 16999 || !reflect.DeepEqual(cfg.Harnesses, []string{"codex"}) {
+		t.Errorf("provisioned %+v", cfg)
+	}
+	if !strings.Contains(out, "http://127.0.0.1:16999/") {
+		t.Errorf("want the web UI address printed, got:\n%s", out)
+	}
+	kept, err := sandbox.LoadConfig(filepath.Join(xdg, "orcasm", "sandboxes"), "orcasm-cli-test-sandbox")
+	if err != nil || kept.HostPort != 16999 {
+		t.Errorf("want the Sandbox's Config kept for later starts, got %+v, %v", kept, err)
+	}
+}
 
 func TestCreateWithAnswersFileRunsTheWizardWithoutPrompting(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	fakeProvision(t)
 	project := filepath.Join(t.TempDir(), "demo")
 	if err := os.Mkdir(project, 0o755); err != nil {
 		t.Fatal(err)
@@ -34,6 +96,7 @@ func TestCreateWithAnswersFileRunsTheWizardWithoutPrompting(t *testing.T) {
 func TestCreatePrintsApprovedSecretsAsSpecsWithoutTheirValues(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-value")
+	fakeProvision(t)
 	project := filepath.Join(t.TempDir(), "demo")
 	if err := os.Mkdir(project, 0o755); err != nil {
 		t.Fatal(err)
