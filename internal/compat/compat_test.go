@@ -56,23 +56,6 @@ func TestAnOrcasmOlderThanEveryEntryHasNoTestedOrca(t *testing.T) {
 	}
 }
 
-func TestOrcaVersionsCompareNumerically(t *testing.T) {
-	for _, c := range []struct {
-		a, b string
-		want int
-	}{
-		{"1.4.227", "1.4.230", -1},
-		{"1.4.30", "1.4.227", -1},
-		{"v1.5.0", "1.4.999", 1},
-		{"1.4.227", "1.4.227", 0},
-		{"1.4", "1.4.0", 0},
-	} {
-		if got := compat.Compare(c.a, c.b); got != c.want {
-			t.Errorf("Compare(%q, %q) = %d, want %d", c.a, c.b, got, c.want)
-		}
-	}
-}
-
 func TestAFileWithoutVersionsIsRefused(t *testing.T) {
 	for _, raw := range []string{`{}`, `{"orca": [{"min_orcasm": "0.1.0"}]}`, `not json`} {
 		if _, err := compat.Parse([]byte(raw)); err == nil {
@@ -139,6 +122,21 @@ func TestFetchReadsThePublishedFile(t *testing.T) {
 	}
 	if got, _ := f.Orca("dev"); got != "1.4.230" {
 		t.Errorf("Orca(dev) = %q", got)
+	}
+}
+
+func TestTheNewestListedOrcaIsTheNewestWhateverOrcasmItNeeds(t *testing.T) {
+	if got := parse(t, published).Newest(); got != "1.4.230" {
+		t.Errorf("Newest = %q, want 1.4.230", got)
+	}
+}
+
+func TestListsTellsWhetherAnOrcaReleaseIsInTheFile(t *testing.T) {
+	f := parse(t, published)
+	for v, want := range map[string]bool{"1.4.229": true, "v1.4.229": true, "1.4.228": false} {
+		if got := f.Lists(v); got != want {
+			t.Errorf("Lists(%q) = %v, want %v", v, got, want)
+		}
 	}
 }
 

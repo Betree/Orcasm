@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Betree/Orcasm/internal/compat"
 	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/stack"
+	"github.com/Betree/Orcasm/internal/version"
 )
 
 // UpgradeOptions are what Upgrade reconciles the Sandbox with.
@@ -128,7 +128,7 @@ func (m Manager) Upgrade(ctx context.Context, name string, opts UpgradeOptions, 
 	}
 	fmt.Fprintln(out)
 	switch {
-	case installed != "" && compat.Compare(installed, opts.Orca) >= 0:
+	case installed != "" && version.Compare(installed, opts.Orca) >= 0:
 		if installed != opts.Orca {
 			fmt.Fprintf(out, "Orca %s is newer than %s; kept.\n", installed, opts.Orca)
 		} else {

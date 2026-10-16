@@ -17,6 +17,9 @@ func TestNewerComparesReleaseTagsWithStampedVersions(t *testing.T) {
 		{"0.9.1", "v0.10.0", true},
 		{"1.0.0", "v0.99.99", false},
 		{"v0.2.0", "0.2.1", true},
+		// A release candidate comes before its release.
+		{"1.0.0-rc1", "v1.0.0", true},
+		{"1.0.0", "v1.0.0-rc1", false},
 	} {
 		got, err := selfupdate.Newer(c.current, c.latest)
 		if err != nil {
@@ -29,7 +32,7 @@ func TestNewerComparesReleaseTagsWithStampedVersions(t *testing.T) {
 }
 
 func TestNewerRejectsVersionsItCannotCompare(t *testing.T) {
-	for _, current := range []string{"dev", "", "1.2"} {
+	for _, current := range []string{"dev", "", "1.x"} {
 		if _, err := selfupdate.Newer(current, "v0.3.0"); err == nil {
 			t.Errorf("Newer(%q, v0.3.0): want an error", current)
 		}

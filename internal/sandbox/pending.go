@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Betree/Orcasm/internal/compat"
+	"github.com/Betree/Orcasm/internal/version"
 )
 
 // Pending is an upgrade waiting for a Sandbox: what `orcasm upgrade` would
@@ -57,7 +57,7 @@ func (m Manager) Pending(ctx context.Context, desiredOrca string) ([]Pending, er
 		if err != nil {
 			return nil, err
 		}
-		if in.Orca != "" && desiredOrca != "" && compat.Compare(in.Orca, desiredOrca) < 0 {
+		if in.Orca != "" && desiredOrca != "" && version.Compare(in.Orca, desiredOrca) < 0 {
 			p.Orca, p.DesiredOrca = in.Orca, desiredOrca
 		}
 		if p.Migrations > 0 || p.DesiredOrca != "" {
