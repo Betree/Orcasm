@@ -102,7 +102,13 @@ func replace(target string, content []byte) error {
 		return err
 	}
 	defer os.Remove(tmp.Name()) // no-op once renamed
+	// Synced before the rename, so a crash cannot leave the old name
+	// pointing at a binary whose data never reached the disk.
 	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
 		tmp.Close()
 		return err
 	}
@@ -112,5 +118,14 @@ func replace(target string, content []byte) error {
 	if err := os.Chmod(tmp.Name(), 0o755); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), resolved)
+	if err := os.Rename(tmp.Name(), resolved); err != nil {
+		return err
+	}
+	// And the rename itself, best effort: not every filesystem syncs a
+	// directory.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }

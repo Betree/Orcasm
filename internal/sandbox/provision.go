@@ -84,7 +84,7 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, orcaVersion 
 	if err != nil {
 		return err
 	}
-	stackArgv, err := stackInstallArgv(main, cfg.Project.ComposeFiles)
+	wrappers, layer, err := orcasmLayer(cfg)
 	if err != nil {
 		return err
 	}
@@ -112,9 +112,8 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, orcaVersion 
 		_ = m.Remove(ctx, cfg.Name)
 		return fmt.Errorf("create Sandbox %s: %w", cfg.Name, err)
 	}
-	fmt.Fprintln(out, "==> Installing the agent wrappers")
-	if err := m.ExecStreaming(ctx, cfg.Name, "", out, agentsInstallArgv(cfg.Harnesses)...); err != nil {
-		return fmt.Errorf("install the agent wrappers in Sandbox %s: %w", cfg.Name, err)
+	if err := runSteps(ctx, m, cfg.Name, out, wrappers); err != nil {
+		return err
 	}
 	argv := append([]string{"bash", "-c", orcaFunctions + provisionScript, "provision",
 		guest.User, strconv.Itoa(cfg.HostPort), orcaVersion, main, cfg.Git.Name, cfg.Git.Email},
@@ -123,13 +122,44 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, orcaVersion 
 		return fmt.Errorf("provision Sandbox %s (kept for inspection; `msb rm --force %s` to discard): %w",
 			cfg.Name, cfg.Name, err)
 	}
-	fmt.Fprintln(out, "==> Installing the stack command for Main's Stack")
-	if err := m.ExecStreaming(ctx, cfg.Name, "", out, stackArgv...); err != nil {
-		return fmt.Errorf("install stack in Sandbox %s: %w", cfg.Name, err)
+	return runSteps(ctx, m, cfg.Name, out, layer...)
+}
+
+// step is one idempotent root install in a Sandbox.
+type step struct {
+	// progress is its "==>" line, and what its error says it failed to do.
+	progress, what string
+	argv           []string
+}
+
+// orcasmLayer is orcasm's own layer in a Sandbox, besides the orcasm binary
+// (InstallOrcasm): the agent wrappers, which must exist before Orca first
+// starts, then the stack command and the proxy. Provision installs it and
+// Upgrade reinstalls it.
+func orcasmLayer(cfg wizard.Config) (wrappers step, rest []step, err error) {
+	stackArgv, err := stackInstallArgv(MainPath(cfg.ProjectPath), cfg.Project.ComposeFiles)
+	if err != nil {
+		return step{}, nil, err
 	}
-	fmt.Fprintln(out, "==> Starting the proxy serving http://<worktree>.localhost")
-	if err := m.ExecStreaming(ctx, cfg.Name, "", out, proxyArgv()...); err != nil {
-		return fmt.Errorf("start the Worktree proxy in Sandbox %s: %w", cfg.Name, err)
+	return step{"Installing the agent wrappers", "install the agent wrappers", agentsInstallArgv(cfg.Harnesses)},
+		[]step{
+			{"Installing the stack command for Main's Stack", "install the stack command", stackArgv},
+			{"Starting the proxy serving http://<worktree>.localhost", "start the Worktree proxy", proxyArgv()},
+		}, nil
+}
+
+// streamer runs a command in a Sandbox with its output streamed to out.
+type streamer interface {
+	ExecStreaming(ctx context.Context, name, user string, out io.Writer, argv ...string) error
+}
+
+// runSteps runs steps as root in Sandbox name, in order.
+func runSteps(ctx context.Context, m streamer, name string, out io.Writer, steps ...step) error {
+	for _, s := range steps {
+		fmt.Fprintf(out, "==> %s\n", s.progress)
+		if err := m.ExecStreaming(ctx, name, "", out, s.argv...); err != nil {
+			return fmt.Errorf("%s in Sandbox %s: %w", s.what, name, err)
+		}
 	}
 	return nil
 }

@@ -15,7 +15,7 @@ func newUpgradeCmd(info BuildInfo) *cobra.Command {
 	var latest bool
 	cmd := sandboxCmd("upgrade", "Bring a Sandbox up to this orcasm in place", func(cmd *cobra.Command, m sandbox.Manager, name string) error {
 		ctx, out := cmd.Context(), cmd.OutOrStdout()
-		orca, from, err := sandbox.NewOrcaSource(info.Version).Desired(ctx, latest)
+		orca, err := sandbox.NewOrcaSource(info.Version).Desired(ctx, latest)
 		if err != nil {
 			return err
 		}
@@ -26,8 +26,8 @@ func newUpgradeCmd(info BuildInfo) *cobra.Command {
 		in := bufio.NewReader(cmd.InOrStdin())
 		res, err := m.Upgrade(ctx, name, sandbox.UpgradeOptions{
 			Orca:        orca,
-			OrcaFrom:    from,
 			GuestBinary: binary,
+			Orcasm:      info.Version,
 			Confirm:     func(q string) bool { return confirm(in, out, q) },
 		}, out)
 		if err != nil {
@@ -46,8 +46,9 @@ func newUpgradeCmd(info BuildInfo) *cobra.Command {
 	cmd.Long = "Apply the Sandbox's pending migrations, keeping its sign-ins and work, then bring\n" +
 		"what runs in it up to date: orcasm itself, the agent harnesses (latest releases) and\n" +
 		"Orca (the newest release tested with this orcasm, or Orca's latest with --latest).\n" +
-		"It asks before restarting Orca while agents run. A stopped Sandbox is started first\n" +
-		"and left running. Workbenches are updated at their next agent launch."
+		"It asks before updating the harnesses or restarting Orca while agents run. A stopped\n" +
+		"Sandbox is started first and left running. Workbenches are updated at their next\n" +
+		"agent launch."
 	cmd.Flags().BoolVar(&latest, "latest", false, "install Orca's latest release, even if untested with this orcasm")
 	return cmd
 }

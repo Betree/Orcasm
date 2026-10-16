@@ -41,6 +41,20 @@ type fakeMSB struct {
 	// ("name host -> guest").
 	streamed []execCall
 	copied   []string
+	// labelErr makes Labels fail for a Sandbox.
+	labelErr map[string]error
+	// execs are the Exec command lines.
+	execs []string
+}
+
+// execd is the last Exec command line containing s ("" if none).
+func (f *fakeMSB) execd(s string) string {
+	for i := len(f.execs) - 1; i >= 0; i-- {
+		if strings.Contains(f.execs[i], s) {
+			return f.execs[i]
+		}
+	}
+	return ""
 }
 
 func newFakeMSB() *fakeMSB { return &fakeMSB{sandboxes: map[string]*fakeSandbox{}} }
@@ -81,6 +95,9 @@ func (f *fakeMSB) List(_ context.Context, labels ...msb.Label) ([]msb.Listing, e
 }
 
 func (f *fakeMSB) Labels(_ context.Context, name string) (map[string]string, error) {
+	if err := f.labelErr[name]; err != nil {
+		return nil, err
+	}
 	sb, err := f.get(name)
 	if err != nil {
 		return nil, err
@@ -143,6 +160,7 @@ func (f *fakeMSB) Exec(_ context.Context, name, _ string, argv ...string) (strin
 		return string(out), err
 	}
 	cmd := strings.Join(argv, " ")
+	f.execs = append(f.execs, cmd)
 	switch {
 	case strings.Contains(cmd, "dpkg-query"):
 		return sb.orca, nil

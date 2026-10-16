@@ -176,7 +176,7 @@ func TestUpgradeStartsAStoppedSandboxSoMigrationsRunWithItsServices(t *testing.T
 		StartSecrets: func(context.Context, string) ([]msb.Secret, error) { return secrets, nil }}
 
 	var out strings.Builder
-	if _, err := m.Upgrade(context.Background(), "demo", sandbox.UpgradeOptions{Orca: "1.4.227"}, &out); err != nil {
+	if _, err := m.Upgrade(context.Background(), "demo", sandbox.UpgradeOptions{Orca: sandbox.OrcaTarget{Version: "1.4.227"}}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(seen, []msb.Status{msb.Running}) {

@@ -112,8 +112,9 @@ func finishWithNewBinary(ctx context.Context, out io.Writer, exe string) error {
 // kills agent sessions and mints a new Orca pairing URL.
 func updateMSB(ctx context.Context, out io.Writer) error {
 	u := selfupdate.MSBUpgrader{
-		Want:    msb.PinnedVersion,
-		Version: doctor.RealHost{}.MsbVersion,
+		Want:          msb.PinnedVersion,
+		InstallScript: msb.InstallScript,
+		Version:       doctor.RealHost{}.MsbVersion,
 		Path: func() (string, error) {
 			p, err := exec.LookPath("msb")
 			if err != nil {
@@ -122,6 +123,10 @@ func updateMSB(ctx context.Context, out io.Writer) error {
 			return filepath.EvalSymlinks(p)
 		},
 		Run: runStreaming,
+		Output: func(ctx context.Context, name string, args ...string) (string, error) {
+			out, err := exec.CommandContext(ctx, name, args...).Output()
+			return string(out), err
+		},
 	}
 	changed, err := u.EnsurePinned(ctx, out)
 	if changed {

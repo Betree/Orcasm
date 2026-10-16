@@ -1,7 +1,7 @@
 package cli
 
 // The daily upgrade notice: once a day, after a host command, one line on
-// stderr per Sandbox an upgrade is pending for (ADR 0006).
+// stderr naming the Sandboxes an upgrade is pending for (ADR 0006).
 
 import (
 	"context"
@@ -39,8 +39,13 @@ func noticeWanted(cmd *cobra.Command, tty bool, getenv func(string) string) bool
 	return true
 }
 
-// upgradeNotice is the root's PersistentPostRun. It fails silently.
-func upgradeNotice(cmd *cobra.Command, _ []string) {
+// upgradeNotice is the root's PersistentPostRun, for an orcasm at info. It
+// fails silently.
+func upgradeNotice(info BuildInfo) func(*cobra.Command, []string) {
+	return func(cmd *cobra.Command, _ []string) { printUpgradeNotice(cmd, info) }
+}
+
+func printUpgradeNotice(cmd *cobra.Command, info BuildInfo) {
 	if !noticeWanted(cmd, isTerminal(os.Stdout), os.Getenv) {
 		return
 	}
@@ -54,9 +59,9 @@ func upgradeNotice(cmd *cobra.Command, _ []string) {
 	}
 	ctx, cancel := context.WithTimeout(cmd.Context(), noticeBudget)
 	defer cancel()
-	src := sandbox.NewOrcaSource(build.Version)
+	src := sandbox.NewOrcaSource(info.Version)
 	src.Timeout = noticeBudget
-	orca, _, err := src.Desired(ctx, false)
+	orca, err := src.Desired(ctx, false)
 	if err != nil {
 		return
 	}
@@ -64,12 +69,12 @@ func upgradeNotice(cmd *cobra.Command, _ []string) {
 	if err != nil {
 		return
 	}
-	pending, err := m.Pending(ctx, orca)
+	pending, err := m.Pending(ctx, sandbox.Installed{Orca: orca.Version, Orcasm: info.Version})
 	if err != nil {
 		return
 	}
-	for _, p := range pending {
-		fmt.Fprintf(cmd.ErrOrStderr(), "orcasm: %s\n", p)
+	if line := sandbox.Notice(pending); line != "" {
+		fmt.Fprintf(cmd.ErrOrStderr(), "orcasm: %s\n", line)
 	}
 }
 

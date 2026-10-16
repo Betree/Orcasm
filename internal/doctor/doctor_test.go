@@ -99,7 +99,7 @@ func TestMissingMsbFailsWithInstallHint(t *testing.T) {
 	h := healthy()
 	h.msbErr = errors.New(`exec: "msb": executable file not found in $PATH`)
 
-	if c := check(t, doctor.Run(h), "msb"); c.OK || !strings.Contains(c.Detail, "install.microsandbox.dev") {
+	if c := check(t, doctor.Run(h), "msb"); c.OK || !strings.Contains(c.Detail, "install-msb.sh") {
 		t.Fatalf("want failing msb check with install hint, got %+v", c)
 	}
 }

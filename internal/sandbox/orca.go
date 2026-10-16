@@ -50,13 +50,18 @@ func NewOrcaSource(orcasm string) OrcaSource {
 	}
 }
 
-// Desired is the Orca release Sandboxes should run, and where it comes from
-// for progress lines. With latest it is Orca's latest release, untested
+// OrcaTarget is an Orca release to run, and where that choice comes from,
+// for progress lines.
+type OrcaTarget struct {
+	Version, From string
+}
+
+// Desired is the Orca release Sandboxes should run. With latest it is Orca's latest release, untested
 // with orcasm, and failing to read it is an error; otherwise it falls back
 // to OrcaVersion. An Override is returned as is, without any request.
-func (s OrcaSource) Desired(ctx context.Context, latest bool) (version, from string, err error) {
+func (s OrcaSource) Desired(ctx context.Context, latest bool) (OrcaTarget, error) {
 	if s.Override != "" {
-		return s.Override, OrcaVersionEnv + " override, maybe untested with this orcasm", nil
+		return OrcaTarget{s.Override, OrcaVersionEnv + " override, maybe untested with this orcasm"}, nil
 	}
 	timeout := s.Timeout
 	if timeout == 0 {
@@ -67,17 +72,17 @@ func (s OrcaSource) Desired(ctx context.Context, latest bool) (version, from str
 	if latest {
 		v, err := compat.LatestOrca(ctx, s.Client, s.LatestURL)
 		if err != nil {
-			return "", "", fmt.Errorf("Orca's latest release: %w", err)
+			return OrcaTarget{}, fmt.Errorf("Orca's latest release: %w", err)
 		}
-		return v, "latest Orca release, untested with this orcasm", nil
+		return OrcaTarget{v, "latest Orca release, untested with this orcasm"}, nil
 	}
 	f, err := compat.Fetch(ctx, s.Client, s.FileURL)
 	if err != nil {
-		return OrcaVersion, fmt.Sprintf("built in; compatibility file unreadable: %v", err), nil
+		return OrcaTarget{OrcaVersion, fmt.Sprintf("built in; compatibility file unreadable: %v", err)}, nil
 	}
 	v, ok := f.Orca(s.Orcasm)
 	if !ok {
-		return OrcaVersion, fmt.Sprintf("built in; compatibility file lists none for orcasm %s", s.Orcasm), nil
+		return OrcaTarget{OrcaVersion, fmt.Sprintf("built in; compatibility file lists none for orcasm %s", s.Orcasm)}, nil
 	}
-	return v, "compatibility file", nil
+	return OrcaTarget{v, "compatibility file"}, nil
 }

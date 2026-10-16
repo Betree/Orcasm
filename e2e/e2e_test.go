@@ -13,7 +13,8 @@
 // compatibility file picks). ORCASM_E2E_FROM_ORCA, when set, is the release
 // the Sandbox is created with, so `orcasm upgrade` moves it to
 // ORCASM_E2E_ORCA. ORCASM_E2E_NAME names the throwaway Sandbox (default
-// e2e-<time>); it must not exist.
+// e2e-<time>); it must not exist. ORCASM_E2E_BINARY is the orcasm to drive
+// (default: built from this checkout), e.g. an older release under test.
 package e2e_test
 
 import (
@@ -49,10 +50,13 @@ func TestASandboxLifeThroughTheBinary(t *testing.T) {
 	name := cmp.Or(os.Getenv("ORCASM_E2E_NAME"), "e2e-"+strconv.FormatInt(time.Now().Unix(), 36))
 	tmp := t.TempDir()
 
-	bin := filepath.Join(tmp, "orcasm")
-	build := exec.Command("go", "build", "-o", bin, "../cmd/orcasm")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
+	bin := os.Getenv("ORCASM_E2E_BINARY")
+	if bin == "" {
+		bin = filepath.Join(tmp, "orcasm")
+		build := exec.Command("go", "build", "-o", bin, "../cmd/orcasm")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Fatalf("go build: %v\n%s", err, out)
+		}
 	}
 
 	project := filepath.Join(tmp, "demo")

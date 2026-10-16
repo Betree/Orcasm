@@ -32,7 +32,8 @@ func orcaServer(t *testing.T, file string) sandbox.OrcaSource {
 func TestTheDesiredOrcaIsTheNewestTestedWithThisOrcasm(t *testing.T) {
 	src := orcaServer(t, `{"orca": [{"version": "1.4.230", "min_orcasm": "0.2.0"}, {"version": "1.4.235", "min_orcasm": "0.3.0"}]}`)
 
-	got, from, err := src.Desired(context.Background(), false)
+	t0, err := src.Desired(context.Background(), false)
+	got, from := t0.Version, t0.From
 	if err != nil || got != "1.4.230" {
 		t.Errorf("Desired = %q, %v; want 1.4.230", got, err)
 	}
@@ -44,7 +45,8 @@ func TestTheDesiredOrcaIsTheNewestTestedWithThisOrcasm(t *testing.T) {
 func TestOfflineTheDesiredOrcaIsTheOneBuiltIntoOrcasm(t *testing.T) {
 	src := orcaServer(t, "")
 
-	got, from, err := src.Desired(context.Background(), false)
+	t0, err := src.Desired(context.Background(), false)
+	got, from := t0.Version, t0.From
 	if err != nil || got != sandbox.OrcaVersion {
 		t.Errorf("Desired = %q, %v; want %s", got, err, sandbox.OrcaVersion)
 	}
@@ -56,7 +58,7 @@ func TestOfflineTheDesiredOrcaIsTheOneBuiltIntoOrcasm(t *testing.T) {
 func TestWithNoOrcaTestedWithThisOrcasmTheBuiltInOneIsDesired(t *testing.T) {
 	src := orcaServer(t, `{"orca": [{"version": "1.4.235", "min_orcasm": "0.3.0"}]}`)
 
-	if got, _, err := src.Desired(context.Background(), false); err != nil || got != sandbox.OrcaVersion {
+	if got, err := src.Desired(context.Background(), false); err != nil || got.Version != sandbox.OrcaVersion {
 		t.Errorf("Desired = %q, %v; want %s", got, err, sandbox.OrcaVersion)
 	}
 }
@@ -69,7 +71,8 @@ func TestTheOrcaVersionOverrideWinsOverTheCompatibilityFileAndLatest(t *testing.
 	src.FileURL, src.LatestURL = "http://127.0.0.1:1/unreachable", "http://127.0.0.1:1/unreachable"
 
 	for _, latest := range []bool{false, true} {
-		got, from, err := src.Desired(context.Background(), latest)
+		t0, err := src.Desired(context.Background(), latest)
+		got, from := t0.Version, t0.From
 		if err != nil || got != "1.4.250" {
 			t.Errorf("Desired(latest=%v) = %q, %v; want 1.4.250", latest, got, err)
 		}
@@ -82,7 +85,8 @@ func TestTheOrcaVersionOverrideWinsOverTheCompatibilityFileAndLatest(t *testing.
 func TestLatestBypassesTheCompatibilityFile(t *testing.T) {
 	src := orcaServer(t, `{"orca": [{"version": "1.4.230", "min_orcasm": "0.0.0"}]}`)
 
-	got, from, err := src.Desired(context.Background(), true)
+	t0, err := src.Desired(context.Background(), true)
+	got, from := t0.Version, t0.From
 	if err != nil || got != "1.4.240" {
 		t.Errorf("Desired = %q, %v; want 1.4.240", got, err)
 	}

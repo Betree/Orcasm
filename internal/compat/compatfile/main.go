@@ -6,17 +6,26 @@
 //	go run ./internal/compat/compatfile mark FILE ORCA ORCASM  # record a pass
 //
 // mark prints "added" or "unchanged" so the workflow knows whether to commit.
+// Any other failure exits 2.
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
 	"github.com/Betree/Orcasm/internal/compat"
 )
 
+// errNotListed is `tested`'s "no": an answer, not a failure.
+var errNotListed = errors.New("not listed")
+
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	err := run(os.Args[1:])
+	switch {
+	case errors.Is(err, errNotListed):
+		os.Exit(1)
+	case err != nil:
 		fmt.Fprintln(os.Stderr, "compatfile:", err)
 		os.Exit(2)
 	}
@@ -37,19 +46,15 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		for _, e := range f.Releases {
-			if compat.Compare(e.Version, args[2]) == 0 {
-				return nil
-			}
+		if !f.Lists(args[2]) {
+			return errNotListed
 		}
-		os.Exit(1)
 	case cmd == "newest" && len(args) == 2:
 		f, err := compat.Parse(raw)
 		if err != nil {
 			return err
 		}
-		v, _ := f.Orca("dev") // a development build sees every entry
-		fmt.Println(v)
+		fmt.Println(f.Newest())
 	case cmd == "mark" && len(args) == 4:
 		out, added, err := compat.MarkTested(raw, compat.Entry{Version: args[2], MinOrcasm: args[3]})
 		if err != nil {

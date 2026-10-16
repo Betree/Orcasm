@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// Every is how often the check is due.
-const Every = 24 * time.Hour
+// Interval is how long a check lasts: the next is due once it has passed.
+const Interval = 24 * time.Hour
 
 // Daily is a once-a-day check.
 type Daily struct {
@@ -36,7 +36,7 @@ func (d Daily) Due() bool {
 	if err != nil {
 		return true
 	}
-	return d.now().Sub(fi.ModTime()) >= Every
+	return d.now().Sub(fi.ModTime()) >= Interval
 }
 
 // Mark records a check now. Mark before checking: a check that fails or

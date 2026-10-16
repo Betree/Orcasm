@@ -20,8 +20,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
+
+	"github.com/Betree/Orcasm/internal/version"
 )
 
 const (
@@ -75,13 +76,11 @@ func MarkTested(raw []byte, e Entry) (out []byte, added bool, err error) {
 		return nil, false, err
 	}
 	e.Version, e.MinOrcasm = strings.TrimPrefix(e.Version, "v"), strings.TrimPrefix(e.MinOrcasm, "v")
-	if !isRelease(e.Version) || !isRelease(e.MinOrcasm) {
+	if !version.IsRelease(e.Version) || !version.IsRelease(e.MinOrcasm) {
 		return nil, false, fmt.Errorf("compatibility entry %+v: want release numbers", e)
 	}
-	for _, have := range f.Releases {
-		if Compare(have.Version, e.Version) == 0 {
-			return raw, false, nil
-		}
+	if f.Lists(e.Version) {
+		return raw, false, nil
 	}
 	f.Releases = append(f.Releases, e)
 	out, err = json.MarshalIndent(f, "", "  ")
@@ -91,68 +90,41 @@ func MarkTested(raw []byte, e Entry) (out []byte, added bool, err error) {
 	return append(out, '\n'), true, nil
 }
 
+// Lists reports whether the file lists Orca release orca.
+func (f File) Lists(orca string) bool {
+	for _, e := range f.Releases {
+		if version.Compare(e.Version, orca) == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Newest is the newest Orca release listed, whichever orcasm it needs.
+func (f File) Newest() string {
+	var newest string
+	for _, e := range f.Releases {
+		if newest == "" || version.Compare(e.Version, newest) > 0 {
+			newest = e.Version
+		}
+	}
+	return newest
+}
+
 // Orca is the newest Orca release tested with an orcasm at orcasmVersion or
 // older. A development build (a version that is not a release number, like
 // "dev") takes the newest of all. ok is false when none qualifies.
-func (f File) Orca(orcasmVersion string) (version string, ok bool) {
-	dev := !isRelease(orcasmVersion)
+func (f File) Orca(orcasmVersion string) (orca string, ok bool) {
+	dev := !version.IsRelease(orcasmVersion)
 	for _, e := range f.Releases {
-		if !dev && Compare(e.MinOrcasm, orcasmVersion) > 0 {
+		if !dev && version.Compare(e.MinOrcasm, orcasmVersion) > 0 {
 			continue
 		}
-		if !ok || Compare(e.Version, version) > 0 {
-			version, ok = e.Version, true
+		if !ok || version.Compare(e.Version, orca) > 0 {
+			orca, ok = e.Version, true
 		}
 	}
-	return version, ok
-}
-
-// Compare orders two dotted release numbers (a leading v is ignored):
-// -1 if a is older than b, 0 if they are the same release, 1 if newer.
-// Missing parts count as 0; a part that is not a number counts as 0 too.
-func Compare(a, b string) int {
-	pa, pb := parts(a), parts(b)
-	for i := 0; i < max(len(pa), len(pb)); i++ {
-		var x, y int
-		if i < len(pa) {
-			x = pa[i]
-		}
-		if i < len(pb) {
-			y = pb[i]
-		}
-		if x != y {
-			if x < y {
-				return -1
-			}
-			return 1
-		}
-	}
-	return 0
-}
-
-func parts(v string) []int {
-	v = strings.TrimPrefix(v, "v")
-	// Pre-release and build suffixes (1.2.3-rc.1) do not order releases here.
-	v, _, _ = strings.Cut(v, "-")
-	var out []int
-	for _, p := range strings.Split(v, ".") {
-		n, _ := strconv.Atoi(p)
-		out = append(out, n)
-	}
-	return out
-}
-
-func isRelease(v string) bool {
-	v = strings.TrimPrefix(v, "v")
-	if v == "" {
-		return false
-	}
-	for _, p := range strings.Split(strings.SplitN(v, "-", 2)[0], ".") {
-		if _, err := strconv.Atoi(p); err != nil {
-			return false
-		}
-	}
-	return true
+	return orca, ok
 }
 
 // Fetch downloads and parses the compatibility file at url. ctx bounds it:
