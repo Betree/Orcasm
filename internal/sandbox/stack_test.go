@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -15,6 +16,12 @@ import (
 // runStack runs the in-Sandbox `stack` command with Main's Stack configured
 // as Provision leaves it, and a fake docker that prints its arguments.
 func runStack(t *testing.T, main string, composeFiles []string, args ...string) (string, error) {
+	t.Helper()
+	return runStackWith(t, "#!/bin/sh\nprintf '[%s]' \"$@\"; echo\n", main, composeFiles, args...)
+}
+
+// runStackWith is runStack with docker being the given script.
+func runStackWith(t *testing.T, docker, main string, composeFiles []string, args ...string) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	conf := filepath.Join(dir, "etc")
@@ -30,7 +37,7 @@ func runStack(t *testing.T, main string, composeFiles []string, args ...string) 
 	}
 	write(t, filepath.Join(conf, "main"), main+"\n", 0o644)
 	write(t, filepath.Join(conf, "main-compose-files"), files, 0o644)
-	write(t, filepath.Join(bin, "docker"), "#!/bin/sh\nprintf '[%s]' \"$@\"; echo\n", 0o755)
+	write(t, filepath.Join(bin, "docker"), docker, 0o755)
 	script := filepath.Join(dir, "stack")
 	write(t, script, sandbox.StackCommand(), 0o755)
 
@@ -55,6 +62,41 @@ func TestStackUpStartsMainsStackDetachedFromTheProjectsComposeFiles(t *testing.T
 	want := "[compose][-p][main][-f][/home/dev/demo/compose.yml][-f][/home/dev/demo/api/compose.dev.yml][up][-d]\n"
 	if out != want {
 		t.Errorf("docker got %q, want %q", out, want)
+	}
+}
+
+// composePublishing is a docker whose `compose config` shows the web
+// service published on host port published; other calls print their args.
+func composePublishing(published string) string {
+	return `#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = config ]; then
+    printf 'name: main\nservices:\n  web:\n    image: nginx\n    ports:\n      - mode: ingress\n        target: 80\n        published: "%s"\n        protocol: tcp\n' ` + published + `
+    exit 0
+  fi
+done
+printf '[%s]' "$@"; echo
+`
+}
+
+// The Worktree proxy serves http://<worktree>.localhost on the Sandbox's
+// port 80, so Main's Stack cannot publish that port too.
+func TestStackUpRefusesToPublishThePortOfTheWorktreeProxy(t *testing.T) {
+	out, err := runStackWith(t, composePublishing("80"), "/home/dev/demo", []string{"compose.yml"}, "up")
+	if err == nil || strings.Contains(out, "[up]") {
+		t.Fatalf("want a refusal without starting the Stack, got %v: %q", err, out)
+	}
+	for _, want := range []string{"port 80", "proxy"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("message %q does not mention %q", out, want)
+		}
+	}
+}
+
+func TestStackUpStartsAStackPublishingOtherPorts(t *testing.T) {
+	out, err := runStackWith(t, composePublishing("8080"), "/home/dev/demo", []string{"compose.yml"}, "up")
+	if err != nil || !strings.Contains(out, "[up][-d]") {
+		t.Errorf("want the Stack started, got %v: %q", err, out)
 	}
 }
 
@@ -106,7 +148,7 @@ func TestProvisionInstallsTheStackCommandForMain(t *testing.T) {
 	root := t.TempDir()
 	installed := false
 	for _, c := range f.execs {
-		if c.user != "" || len(c.argv) < 3 || c.argv[0] != "bash" || !strings.Contains(c.argv[2], "/usr/local/bin/stack") {
+		if c.user != "" || len(c.argv) < 4 || c.argv[0] != "bash" || !slices.Contains(c.argv, "/usr/local/bin/stack") {
 			continue
 		}
 		cmd := exec.Command(c.argv[0], c.argv[1:]...)

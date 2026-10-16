@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/sandbox"
 	"github.com/Betree/Orcasm/internal/wizard"
 	"github.com/Betree/Orcasm/internal/worktree"
@@ -77,7 +78,7 @@ func TestInstallOrcasmPutsTheBinaryAndTheWorktreeConfigInTheSandbox(t *testing.T
 	if err != nil || string(out) != "orcasm\n" {
 		t.Errorf("installed binary: %q, %v", out, err)
 	}
-	got, err := worktree.ReadConfig(filepath.Join(g.root, worktree.ConfigFile))
+	got, err := worktree.ReadConfig(filepath.Join(g.root, guest.ConfDir, guest.WorktreeConfig))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +96,8 @@ func TestInstallOrcasmPutsTheBinaryAndTheWorktreeConfigInTheSandbox(t *testing.T
 		raw, _ := json.Marshal(got)
 		t.Errorf("config %s, want %+v", raw, want)
 	}
-	if fi, err := os.Stat(filepath.Join(g.root, sandbox.WorktreesDir)); err != nil || !fi.IsDir() {
-		t.Errorf("%s: %v", sandbox.WorktreesDir, err)
+	if fi, err := os.Stat(filepath.Join(g.root, guest.WorktreesDir)); err != nil || !fi.IsDir() {
+		t.Errorf("%s: %v", guest.WorktreesDir, err)
 	}
 }
 

@@ -108,6 +108,7 @@ Everything here comes from docs, help text or source. **Nothing in §1–10 was 
   - (docs:/networking/overview)
 - **Reaching the host:** `host.microsandbox.internal`, which needs the `host` profile, e.g. `--net public,host`.
 - **Host sockets:** `--vsock HOST_PATH:PORT` exposes a host Unix socket to the guest without opening TCP (docs:/networking/host-sockets).
+- **Known limitation (#20, #21): the Sandbox's port 80 belongs to the Worktree proxy.** The proxy (`orcasm-proxy`, Traefik on the host network) serves `http://<worktree>.localhost` on port 80 of every guest interface, which is the URL Orca's integrated browser opens. Worktree Stacks publish no ports, but Main's Stack keeps its published ports. If a Project's Compose files publish host port 80, Main's Stack cannot start. `stack up` checks `docker compose config` for this and refuses with a message to publish the port elsewhere (e.g. `"8080:80"`). Moving the proxy off port 80 would put a port in every Worktree URL, so we did not.
 
 ## 6. Secrets
 
@@ -126,6 +127,7 @@ Everything here comes from docs, help text or source. **Nothing in §1–10 was 
   - **Violation actions:** `block`, `block-and-log` (the default), and `block-and-terminate`. A request to a non-allowed host carrying the placeholder is blocked.
   - **Passthrough:** `passthrough=<host>` lets a named host receive the placeholder unchanged.
 - **TLS trust:** secrets require TLS interception, which is enabled automatically. msb adds its CA (`~/.microsandbox/tls/ca.{crt,key}`) to the guest system trust store. Applications that keep their own trust store, such as Node, Python certifi, or **containers inside Docker**, need extra setup; the `scripts/msb-trust/msb-trust.sh` helper covers common cases (docs:/networking/tls).
+- **Known limitation (#17): only the Workbench trusts msb's CA.** The Stack override mounts the Sandbox's CA bundle into the Workbench alone and points `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE` and `GIT_SSL_CAINFO` at it. Once a Sandbox has any secret, msb intercepts all outbound TLS, including from containers. Other services of a Stack (an API calling a third-party HTTPS service, an app container running `npm install` at start) then fail with certificate errors, both in Worktree Stacks and in Main's. orcasm does not force the bundle into arbitrary images: their CA paths and tools differ, and replacing a service's trust store could break it. A Project that needs this mounts `/etc/ssl/certs/ca-certificates.crt` into the service itself, or sets its runtime's CA variable. A Sandbox without secrets has no interception and no such failures.
 - **Can guest code read the raw value? No**, for values passed as secrets. The guest only ever holds the placeholder. Caveats from the docs:
   - An allowed endpoint that echoes the credential back exposes it.
   - Placeholders cannot be used for credentials that are signed inside the guest.

@@ -4,13 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,15 +25,22 @@ type fakeDocker struct {
 	calls    [][]string
 	// reply, if set, answers the calls other than `config --services`.
 	reply func(args []string) (string, error)
-	mu    sync.Mutex
+	// unlocked runs reply concurrently, as the real docker would.
+	unlocked bool
+	mu       sync.Mutex
 }
 
 func (f *fakeDocker) run(_ context.Context, args ...string) ([]byte, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, args)
-	if f.reply != nil && !slices.Contains(args, "--services") {
-		out, err := f.reply(args)
+	reply, unlocked := f.reply, f.unlocked
+	if unlocked {
+		f.mu.Unlock()
+	} else {
+		defer f.mu.Unlock()
+	}
+	if reply != nil && !slices.Contains(args, "--services") {
+		out, err := reply(args)
 		return []byte(out), err
 	}
 	return []byte(strings.Join(f.services, "\n") + "\n"), nil
@@ -54,11 +62,24 @@ type fixture struct {
 	hooks    worktree.Hooks
 	docker   *fakeDocker
 	detached [][]string
+	// upRuns keeps the detached `up` "running" after Setup returns: it
+	// holds what Setup handed it until upEnds.
+	upRuns bool
+	up     *os.File
+}
+
+// upEnds makes the detached `up` exit.
+func (f *fixture) upEnds() {
+	if f.up != nil {
+		f.up.Close()
+		f.up = nil
+	}
 }
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{docker: &fakeDocker{services: []string{"web"}}}
+	t.Cleanup(f.upEnds)
 	home := t.TempDir()
 	f.hooks = worktree.Hooks{
 		Config: worktree.Config{
@@ -71,8 +92,17 @@ func newFixture(t *testing.T) *fixture {
 			Home:         home,
 		},
 		Docker: f.docker.run,
-		Detach: func(dir string, argv ...string) error {
+		// Like a real child process, the background `up` keeps its own
+		// copy of the files it inherits, open until it exits.
+		Detach: func(dir string, inherit []*os.File, argv ...string) error {
 			f.detached = append(f.detached, append([]string{dir}, argv...))
+			if f.upRuns && len(inherit) > 0 {
+				fd, err := syscall.Dup(int(inherit[0].Fd()))
+				if err != nil {
+					return err
+				}
+				f.up = os.NewFile(uintptr(fd), "up")
+			}
 			return nil
 		},
 	}
@@ -81,7 +111,7 @@ func newFixture(t *testing.T) *fixture {
 
 func TestSetupStartsTheWorktreesStackInTheBackground(t *testing.T) {
 	f := newFixture(t)
-	if err := f.hooks.Setup(context.Background(), "/worktrees/shop/feat-login"); err != nil {
+	if err := f.hooks.Setup(context.Background(), "/worktrees/shop/feat-login", io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if len(f.detached) != 1 {
@@ -121,7 +151,7 @@ func TestArchiveTearsDownTheStackSetupStarted(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	path := "/worktrees/shop/feat-login"
-	if err := f.hooks.Setup(ctx, path); err != nil {
+	if err := f.hooks.Setup(ctx, path, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	dir := f.detached[0][0]
@@ -162,7 +192,7 @@ func (f *fixture) running(id func() string) {
 func TestTheWorkbenchOfARunningStackIsFoundFromAnywhereInTheWorktree(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	if err := f.hooks.Setup(ctx, "/worktrees/shop/feat-login"); err != nil {
+	if err := f.hooks.Setup(ctx, "/worktrees/shop/feat-login", io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	f.running(func() string { return "c0ffee" })
@@ -192,21 +222,18 @@ func TestTheWorkbenchOfARunningStackIsFoundFromAnywhereInTheWorktree(t *testing.
 	}
 }
 
-func TestWhileTheStackStartsTheAgentSeesItsProgress(t *testing.T) {
+// An agent launched right after Setup, before the background `up` has done
+// anything (written no pid, no log), still waits for it: two `compose up
+// --build` of one Stack must never run at once.
+func TestWhileTheStackStartsTheAgentWaitsAndSeesItsProgress(t *testing.T) {
 	f := newFixture(t)
+	f.upRuns = true
 	ctx := context.Background()
 	path := "/worktrees/shop/feat-login"
-	if err := f.hooks.Setup(ctx, path); err != nil {
+	if err := f.hooks.Setup(ctx, path, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	dir := f.hooks.StateDir("feat-login")
-	// A background `up` still running: its pid file names a live process.
-	up := exec.Command("sleep", "30")
-	if err := up.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer up.Process.Kill()
-	must(t, os.WriteFile(filepath.Join(dir, "up.pid"), []byte(strconv.Itoa(up.Process.Pid)), 0o644))
 	log := filepath.Join(dir, worktree.LogFile)
 	must(t, os.WriteFile(log, []byte("Building web\n"), 0o644))
 	var mu sync.Mutex
@@ -245,7 +272,7 @@ func TestWhileTheStackStartsTheAgentSeesItsProgress(t *testing.T) {
 	mu.Lock()
 	upDone = true
 	mu.Unlock()
-	must(t, os.Remove(filepath.Join(dir, "up.pid")))
+	f.upEnds()
 
 	r := <-got
 	if r.err != nil || r.id != "c0ffee" {
@@ -261,12 +288,61 @@ func TestWhileTheStackStartsTheAgentSeesItsProgress(t *testing.T) {
 	}
 }
 
+// After a Sandbox restart, agents launched together in one Worktree start
+// its stopped Stack once, not once each.
+func TestAgentsLaunchedTogetherStartAStoppedStackOnce(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	path := "/worktrees/shop/feat-login"
+	if err := f.hooks.Setup(ctx, path, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	f.hooks.Poll = 5 * time.Millisecond
+	var mu sync.Mutex
+	ups, started := 0, false
+	f.docker.reply = func(args []string) (string, error) {
+		switch {
+		case slices.Contains(args, "up"):
+			mu.Lock()
+			ups++
+			mu.Unlock()
+			time.Sleep(50 * time.Millisecond) // building
+			mu.Lock()
+			started = true
+			mu.Unlock()
+		case slices.Contains(args, "ps"):
+			mu.Lock()
+			defer mu.Unlock()
+			if started {
+				return "c0ffee\n", nil
+			}
+		}
+		return "", nil
+	}
+	// fakeDocker serialises its calls: let `up` sleep outside its lock.
+	f.docker.unlocked = true
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if id, err := f.hooks.Workbench(ctx, path, io.Discard); err != nil || id != "c0ffee" {
+				t.Errorf("id %q, err %v", id, err)
+			}
+		}()
+	}
+	wg.Wait()
+	if ups != 1 {
+		t.Errorf("the Stack was started %d times, want once", ups)
+	}
+}
+
 func TestAStoppedStackIsStartedAgain(t *testing.T) {
 	// E.g. after the Sandbox restarted: nothing brings the Workbench back.
 	f := newFixture(t)
 	ctx := context.Background()
 	path := "/worktrees/shop/feat-login"
-	if err := f.hooks.Setup(ctx, path); err != nil {
+	if err := f.hooks.Setup(ctx, path, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	started := false
@@ -293,7 +369,7 @@ func TestAStackThatWillNotStartIsReported(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	path := "/worktrees/shop/feat-login"
-	if err := f.hooks.Setup(ctx, path); err != nil {
+	if err := f.hooks.Setup(ctx, path, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	f.docker.reply = func(args []string) (string, error) {
@@ -308,11 +384,80 @@ func TestAStackThatWillNotStartIsReported(t *testing.T) {
 	}
 }
 
-func TestAWorktreeWhoseSetupNeverRanHasNoWorkbench(t *testing.T) {
+// Setup has 2 minutes: if an agent is already starting the Stack, it leaves
+// that to the agent instead of waiting for it.
+func TestSetupLeavesAStackAnAgentIsStartingToIt(t *testing.T) {
 	f := newFixture(t)
-	_, err := f.hooks.Workbench(context.Background(), "/worktrees/shop/no-setup", &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "setup") {
-		t.Errorf("err = %v, want one pointing at Orca's setup hook", err)
+	ctx := context.Background()
+	path := "/worktrees/shop/early"
+	release := make(chan struct{})
+	upping := make(chan struct{})
+	started := false
+	f.docker.unlocked = true
+	f.docker.reply = func(args []string) (string, error) {
+		switch {
+		case slices.Contains(args, "up"):
+			close(upping)
+			<-release // building
+			started = true
+		case slices.Contains(args, "ps") && started:
+			return "c0ffee\n", nil
+		}
+		return "", nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := f.hooks.Workbench(ctx, path, io.Discard)
+		done <- err
+	}()
+	<-upping
+	setup := make(chan error, 1)
+	go func() { setup <- f.hooks.Setup(ctx, path, io.Discard) }()
+	select {
+	case err := <-setup:
+		if err != nil {
+			t.Errorf("setup: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("setup waited for the agent's Stack start")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if len(f.detached) != 0 {
+		t.Errorf("setup detached %v though the Stack was being started", f.detached)
+	}
+}
+
+// Orca runs the setup hook in a terminal of its own after creating the
+// Worktree, so an agent may launch first (or setup was skipped): the agent
+// then generates and starts the Stack itself, from the Worktree's checkout.
+func TestAnAgentLaunchedBeforeSetupStartsTheStackItself(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	started := false
+	f.docker.reply = func(args []string) (string, error) {
+		switch {
+		case slices.Contains(args, "up"):
+			started = true
+		case slices.Contains(args, "ps") && started:
+			return "c0ffee\n", nil
+		}
+		return "", nil
+	}
+	id, err := f.hooks.Workbench(ctx, "/worktrees/shop/early/src", io.Discard)
+	if err != nil || id != "c0ffee" {
+		t.Fatalf("id %q, err %v", id, err)
+	}
+	up := f.docker.called("up", "--detach", "--build", "--remove-orphans")
+	if up == nil || !slices.Contains(up, "orcasm-early") || !slices.Contains(up, "/worktrees/shop/early/compose.yml") {
+		t.Errorf("up call %v", up)
+	}
+	// Setup, when it runs, then finds the Stack it would have made.
+	st, err := worktree.Load(f.hooks.StateDir("early"))
+	if err != nil || st.Project != "orcasm-early" {
+		t.Errorf("saved Stack %+v, %v", st, err)
 	}
 }
 
@@ -320,5 +465,31 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// #18 asks for Worktrees created with `--setup run`. Orca decides from the
+// repo's setupRunPolicy when not told (the UI, or `orca-ide worktree create`
+// without --setup): run-by-default makes that a run, never a prompt.
+func TestOrcaRunsSetupOnEveryWorktreeItCreates(t *testing.T) {
+	s := worktree.OrcaSettings()
+	if s.HookSettings == nil || s.HookSettings.SetupRunPolicy != "run-by-default" || s.HookSettings.Mode != "auto" {
+		t.Fatalf("hook settings %+v", s.HookSettings)
+	}
+	if s.HookSettings.Scripts.Setup != "/usr/local/bin/orcasm worktree setup" ||
+		s.HookSettings.Scripts.Archive != "/usr/local/bin/orcasm worktree archive" {
+		t.Errorf("scripts %+v", s.HookSettings.Scripts)
+	}
+	if s.WorktreeBasePath != "/worktrees" {
+		t.Errorf("worktree base path %q", s.WorktreeBasePath)
+	}
+}
+
+func TestAPathOutsideTheWorktreesIsNoWorktree(t *testing.T) {
+	f := newFixture(t)
+	for _, p := range []string{"/home/dev/shop", "/worktrees/shop", "/worktrees"} {
+		if err := f.hooks.Setup(context.Background(), p, io.Discard); err == nil {
+			t.Errorf("Setup(%s) succeeded", p)
+		}
 	}
 }

@@ -3,7 +3,7 @@
 package sandbox_test
 
 // Orca's Worktree hooks end to end in a real Sandbox (several minutes, needs
-// network): a Worktree created in Orca with `--setup run` brings its Stack
+// network): a Worktree created in Orca (setup run by the repo's policy) brings its Stack
 // up, archiving it tears the Stack down.
 //
 //	ORCASM_TEST_HOOKS_SANDBOX=<throwaway name> ORCASM_TEST_PORT=<free host port> \
@@ -22,12 +22,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/repository"
 	"github.com/Betree/Orcasm/internal/sandbox"
 	"github.com/Betree/Orcasm/internal/stack"
 	"github.com/Betree/Orcasm/internal/wizard"
-	"github.com/Betree/Orcasm/internal/worktree"
 )
 
 func TestWorktreeHooksInARealSandbox(t *testing.T) {
@@ -81,31 +81,37 @@ func TestWorktreeHooksInARealSandbox(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !reuse {
-		if err := repository.Copy(ctx, sb, repository.CopyOptions{HostPath: project, GuestPath: main, Owner: sandbox.User}); err != nil {
+		if err := repository.Copy(ctx, sb, repository.CopyOptions{HostPath: project, GuestPath: main, Owner: guest.User}); err != nil {
 			t.Fatal(err)
 		}
-		if err := repository.RegisterInOrca(ctx, sb, sandbox.User, main); err != nil {
+		if err := repository.RegisterInOrca(ctx, sb, guest.User, main); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if out, err := sb.Exec(ctx, sandbox.User, worktree.Binary, "worktree", "install-hooks", main); err != nil {
+	if out, err := sb.Exec(ctx, guest.User, guest.Binary, "worktree", "install-hooks", main); err != nil {
 		t.Fatalf("install-hooks: %v\n%s", err, out)
 	}
 
 	wt := "hooks-" + strconv.FormatInt(time.Now().Unix()%100000, 10)
-	path := sandbox.WorktreesDir + "/demo/" + wt
+	path := guest.WorktreesDir + "/demo/" + wt
 	project = "orcasm-" + wt
 	dev := func(script string) string {
 		t.Helper()
-		out, err := sb.Exec(ctx, sandbox.User, "bash", "-lc", script)
+		out, err := sb.Exec(ctx, guest.User, "bash", "-lc", script)
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", script, err, out)
 		}
 		return out
 	}
-	dev("cd " + main + " && orca-ide worktree create --name " + wt + " --repo path:" + main + " --setup run --json >/dev/null")
+	// No --setup: the repo's setupRunPolicy (run-by-default, #18) decides.
+	dev("cd " + main + " && orca-ide worktree create --name " + wt + " --repo path:" + main + " --json >/dev/null")
 
-	// Setup returns at once; the Stack comes up in the background.
+	// Orca runs setup in a terminal of its own once the Worktree exists, and
+	// setup returns at once while the Stack comes up in the background. An
+	// agent launched right away gets its Workbench either way: it waits
+	// for setup's `up`, or starts the Stack first (setup then leaves it).
+	first := dev("cd " + path + " && " + cfg.Harnesses[0] + " --version 2>&1")
+	t.Logf("%s right after creating the Worktree:\n%s", cfg.Harnesses[0], first)
 	running := ""
 	for i := 0; i < 90 && !(strings.Contains(running, "orcasm-workbench") && strings.Contains(running, "web")); i++ {
 		time.Sleep(2 * time.Second)
