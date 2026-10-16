@@ -5,6 +5,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -102,9 +103,8 @@ func TestComposeFilesAreReadFromTheCheckoutOfTheirRepository(t *testing.T) {
 
 func TestProjectNameIsAValidComposeNameForAnyWorktreeName(t *testing.T) {
 	for name, want := range map[string]string{
-		"feat-login":       "orcasm-feat-login",
-		"Fix/Login.v2 now": "orcasm-fix-login-v2-now",
-		"a_b":              "orcasm-a_b",
+		"feat-login": "orcasm-feat-login",
+		"a_b":        "orcasm-a_b",
 	} {
 		if got := stack.ProjectName(name); got != want {
 			t.Errorf("ProjectName(%q) = %q, want %q", name, got, want)
@@ -295,15 +295,15 @@ func labels(t *testing.T, o override, service string) map[string]string {
 
 func TestTheProxyRoutesTheWorktreeHostnameToTheWebServicePort(t *testing.T) {
 	s := spec(t)
-	s.Worktree = "Fix/Login_2"
+	s.Worktree = "fix-login-2"
 	s.WebService, s.WebPort = "web", 3000
 	_, o, _ := generate(t, s, "app", "web", "db")
 	got := labels(t, o, "web")
 	want := map[string]string{
 		"orcasm.proxy":   "true",
 		"traefik.enable": "true",
-		"traefik.http.routers.orcasm-fix-login_2.rule":                      "Host(`fix-login-2.localhost`)",
-		"traefik.http.services.orcasm-fix-login_2.loadbalancer.server.port": "3000",
+		"traefik.http.routers.orcasm-fix-login-2.rule":                      "Host(`fix-login-2.localhost`)",
+		"traefik.http.services.orcasm-fix-login-2.loadbalancer.server.port": "3000",
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("web labels = %v, want %v", got, want)
@@ -317,9 +317,8 @@ func TestTheProxyRoutesTheWorktreeHostnameToTheWebServicePort(t *testing.T) {
 
 func TestHostnameIsTheWorktreeUnderLocalhost(t *testing.T) {
 	for name, want := range map[string]string{
-		"feat-login":       "feat-login.localhost",
-		"Fix/Login.v2 now": "fix-login-v2-now.localhost",
-		"a_b":              "a-b.localhost",
+		"feat-login": "feat-login.localhost",
+		"a-b":        "a-b.localhost",
 	} {
 		if got := stack.Hostname(name); got != want {
 			t.Errorf("Hostname(%q) = %q, want %q", name, got, want)
@@ -469,5 +468,31 @@ func TestTheGenericWorkbenchHasWhatOrcasHooksAndAgentsRun(t *testing.T) {
 		if !strings.Contains(wb.Build.Inline, tool) {
 			t.Errorf("generic image lacks %s:\n%s", tool, wb.Build.Inline)
 		}
+	}
+}
+
+// Names Compose or DNS can't take as they are get a hash of the original,
+// so two Worktrees never share a Stack or a hostname.
+func TestDistinctWorktreesNeverShareAStackOrAHostname(t *testing.T) {
+	names := []string{"fix-login", "Fix-Login", "fix_login", "fix/login", "Fix/Login.v2 now"}
+	projects, hosts := map[string]string{}, map[string]string{}
+	for _, n := range names {
+		p, h := stack.ProjectName(n), stack.Hostname(n)
+		if prev, ok := projects[p]; ok {
+			t.Errorf("%q and %q share Compose project %s", prev, n, p)
+		}
+		if prev, ok := hosts[h]; ok {
+			t.Errorf("%q and %q share hostname %s", prev, n, h)
+		}
+		projects[p], hosts[h] = n, n
+		if !regexp.MustCompile(`^orcasm-[a-z0-9][a-z0-9_-]*$`).MatchString(p) {
+			t.Errorf("ProjectName(%q) = %q is no Compose project name", n, p)
+		}
+		if !regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.localhost$`).MatchString(h) {
+			t.Errorf("Hostname(%q) = %q is no hostname", n, h)
+		}
+	}
+	if got := stack.Hostname("Fix/Login.v2 now"); !strings.HasPrefix(got, "fix-login-v2-now-") {
+		t.Errorf("Hostname keeps no readable prefix: %s", got)
 	}
 }

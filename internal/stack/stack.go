@@ -9,6 +9,8 @@ package stack
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -271,14 +273,37 @@ var (
 // http://<Hostname>/ from inside the Sandbox, e.g. in Orca's browser
 // (*.localhost resolves to the loopback).
 func Hostname(worktree string) string {
-	return strings.Trim(unsafeHost.ReplaceAllString(strings.ToLower(worktree), "-"), "-") + ".localhost"
+	return slug(worktree, unsafeHost) + ".localhost"
 }
 
 // ProjectName is the Compose project name of a Worktree's Stack: sibling
 // checkouts of one Worktree share it.
 func ProjectName(worktree string) string {
-	return "orcasm-" + strings.Trim(unsafeName.ReplaceAllString(strings.ToLower(worktree), "-"), "-")
+	return "orcasm-" + slug(worktree, unsafeName)
 }
+
+// slug is worktree lowercased, with runs of unsafe characters turned into
+// "-". When that changes the name, a hash of it is appended, so distinct
+// Worktrees ("Fix_Login", "fix-login") never share a Stack, its state and
+// volumes, or a hostname. Worktrees of the same name (sibling checkouts,
+// ADR 0005) still do.
+func slug(worktree string, unsafe *regexp.Regexp) string {
+	s := strings.Trim(unsafe.ReplaceAllString(strings.ToLower(worktree), "-"), "-")
+	if s == worktree && len(s) <= maxSlug {
+		return s
+	}
+	sum := sha256.Sum256([]byte(worktree))
+	if len(s) > maxSlug-9 {
+		s = strings.TrimRight(s[:maxSlug-9], "-")
+	}
+	if s != "" {
+		s += "-"
+	}
+	return s + hex.EncodeToString(sum[:])[:8]
+}
+
+// maxSlug keeps a hostname label within DNS's 63 characters.
+const maxSlug = 63
 
 // Command is the `docker` argv running `docker compose args...` on the
 // whole Stack.

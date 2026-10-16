@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -491,5 +492,133 @@ func TestAPathOutsideTheWorktreesIsNoWorktree(t *testing.T) {
 		if err := f.hooks.Setup(context.Background(), p, io.Discard); err == nil {
 			t.Errorf("Setup(%s) succeeded", p)
 		}
+	}
+}
+
+// sleeper is a process in its own process group, as the background `up` is;
+// it is reaped when the test ends.
+func sleeper(t *testing.T) *os.Process {
+	t.Helper()
+	c := exec.Command("sleep", "30")
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { c.Wait(); close(exited) }()
+	t.Cleanup(func() { c.Process.Kill(); <-exited })
+	return c.Process
+}
+
+func alive(p *os.Process) bool { return p.Signal(syscall.Signal(0)) == nil }
+
+// An `up` killed with the Sandbox leaves its pid behind; by archive time
+// that pid may be another process's, which must be left alone.
+func TestArchiveLeavesAStalePidsProcessAlone(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	path := "/worktrees/shop/stale"
+	if err := f.hooks.Setup(ctx, path, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	other := sleeper(t)
+	dir := f.detached[0][0]
+	if err := os.WriteFile(filepath.Join(dir, "up.pid"), []byte(strconv.Itoa(other.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.hooks.Archive(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if !alive(other) {
+		t.Error("archive signalled the process holding a stale up.pid")
+	}
+}
+
+func TestArchiveStopsTheRunningUpBeforeTearingDown(t *testing.T) {
+	f := newFixture(t)
+	f.upRuns = true
+	f.hooks.Poll = 5 * time.Millisecond
+	ctx := context.Background()
+	path := "/worktrees/shop/running"
+	if err := f.hooks.Setup(ctx, path, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	up := sleeper(t)
+	dir := f.detached[0][0]
+	if err := os.WriteFile(filepath.Join(dir, "up.pid"), []byte(strconv.Itoa(up.Pid)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- f.hooks.Archive(ctx, path) }()
+	deadline := time.Now().Add(2 * time.Second)
+	for alive(up) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if alive(up) {
+		t.Fatal("archive did not stop the running up")
+	}
+	if f.docker.called("down", "--volumes", "--remove-orphans") != nil {
+		t.Error("archive tore down while up still held the Stack")
+	}
+	f.upEnds() // the real `up` exits on SIGTERM, releasing the lock it inherited
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if f.docker.called("down", "--volumes", "--remove-orphans") == nil {
+		t.Error("archive never tore down")
+	}
+}
+
+// An agent starting a stopped Stack holds its lock but records no pid:
+// archive waits for it, so the Stack does not come back after teardown.
+func TestArchiveWaitsForAnAgentStartingTheStack(t *testing.T) {
+	f := newFixture(t)
+	f.hooks.Poll = 5 * time.Millisecond
+	ctx := context.Background()
+	path := "/worktrees/shop/racing"
+	release := make(chan struct{})
+	upping := make(chan struct{})
+	var order []string
+	var mu sync.Mutex
+	note := func(s string) { mu.Lock(); order = append(order, s); mu.Unlock() }
+	f.docker.unlocked = true
+	f.docker.reply = func(args []string) (string, error) {
+		switch {
+		case slices.Contains(args, "up"):
+			close(upping)
+			<-release
+			note("up")
+		case slices.Contains(args, "down"):
+			note("down")
+		case slices.Contains(args, "ps"):
+			mu.Lock()
+			defer mu.Unlock()
+			if slices.Contains(order, "up") {
+				return "c0ffee\n", nil
+			}
+		}
+		return "", nil
+	}
+	agent := make(chan error, 1)
+	go func() {
+		_, err := f.hooks.Workbench(ctx, path, io.Discard)
+		agent <- err
+	}()
+	<-upping
+	archived := make(chan error, 1)
+	go func() { archived <- f.hooks.Archive(ctx, path) }()
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	if err := <-agent; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-archived; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.Equal(order, []string{"up", "down"}) {
+		t.Errorf("order %v, want the agent's up before archive's down", order)
 	}
 }

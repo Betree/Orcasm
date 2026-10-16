@@ -239,15 +239,36 @@ func DetachSelf(dir string, inherit []*os.File, argv ...string) error {
 
 // Archive tears down the Stack of the Worktree checked out at path: it stops
 // a still running `up`, removes the Stack's containers, networks and
-// volumes, and forgets the Stack. It tears down right away: with one
-// checkout per Worktree there are no siblings to wait for (ADR 0005, #28).
+// volumes, and forgets the Stack. It holds the Stack's lock while doing so,
+// so an agent starting the Stack finishes first rather than bringing it
+// back after the teardown. With one checkout per Worktree there are no
+// siblings to wait for (ADR 0005, #28).
 func (h Hooks) Archive(ctx context.Context, path string) error {
 	name, err := NameOf(path)
 	if err != nil {
 		return err
 	}
 	dir := h.StateDir(name)
-	stopUp(dir)
+	wait, cancel := context.WithTimeout(ctx, archiveWait)
+	defer cancel()
+	stopped := false
+	lock, err := h.lock(wait, dir, func() error {
+		// Only a held lock means a live `up`: a pid file alone may be
+		// stale (Sandbox restart) and its pid another process's.
+		if !stopped {
+			stopUp(dir)
+			stopped = true
+		}
+		return nil
+	})
+	switch {
+	case err == nil:
+		defer lock.Close()
+	case !errors.Is(err, context.DeadlineExceeded):
+		return err
+	}
+	// Past archiveWait the Stack is torn down anyway, within Orca's hook
+	// timeout.
 	st, err := Load(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		// Setup never ran (e.g. created with --setup skip): Compose finds
@@ -262,8 +283,13 @@ func (h Hooks) Archive(ctx context.Context, path string) error {
 	return os.RemoveAll(dir)
 }
 
-// stopUp ends the background `up` recorded in dir, if still running, with
-// the docker compose it runs (same process group).
+// archiveWait bounds how long Archive waits for whoever starts the Stack,
+// inside Orca's 2-minute hook timeout.
+const archiveWait = 90 * time.Second
+
+// stopUp ends the background `up` recorded in dir with the docker compose
+// it runs (same process group). Only call it while the Stack's lock is
+// held by someone else: that `up` is then still running.
 func stopUp(dir string) {
 	raw, err := os.ReadFile(filepath.Join(dir, pidFile))
 	if err != nil {
@@ -391,6 +417,11 @@ func (h Hooks) lock(ctx context.Context, dir string, wait func() error) (*os.Fil
 	for {
 		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
+			// No `up` holds the lock, so a pid file is a dead one's.
+			if err := os.Remove(filepath.Join(dir, pidFile)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				f.Close()
+				return nil, err
+			}
 			return f, nil
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) {

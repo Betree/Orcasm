@@ -112,7 +112,7 @@ services:
 			if err := json.Unmarshal(out, &merged); err != nil {
 				t.Fatal(err)
 			}
-			if merged.Name != "orcasm-feat-login" {
+			if merged.Name != stack.ProjectName("Feat/Login") {
 				t.Errorf("name = %q", merged.Name)
 			}
 			for name, svc := range merged.Services {
