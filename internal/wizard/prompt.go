@@ -155,6 +155,14 @@ func (p prompter) share(cfg *Config, secrets []Secret, git GitIdentity) error {
 	return nil
 }
 
+// linkSSHConfig asks for consent to add orcasm's Include to ~/.ssh/config.
+func (p prompter) linkSSHConfig(link *bool) error {
+	return p.run(huh.NewGroup(huh.NewConfirm().
+		Title("Add one Include line to ~/.ssh/config so VS Code Remote-SSH lists your Sandboxes?").
+		Description("`orcasm ssh` and the orcasm-<name> git remote work either way.").
+		Value(link)))
+}
+
 // isInt accepts a number, or nothing: in line-by-line mode an empty answer
 // keeps the default, and an emptied field otherwise fails validation.
 func isInt(v string) error {

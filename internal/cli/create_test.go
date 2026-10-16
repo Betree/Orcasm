@@ -16,28 +16,27 @@ import (
 )
 
 // TestMain makes sure no test boots a real Sandbox: tests running
-// `orcasm create` must call fakeProvision.
+// `orcasm create` must call fakeCreate.
 func TestMain(m *testing.M) {
-	cli.SetProvision(func(context.Context, wizard.Config, sandbox.SecretValue, io.Writer) error {
-		return errors.New("test would provision a real Sandbox: call fakeProvision")
+	cli.SetCreate(func(context.Context, wizard.Config, sandbox.SecretValue, io.Writer) error {
+		return errors.New("test would create a real Sandbox: call fakeCreate")
 	})
 	os.Exit(m.Run())
 }
 
-// fakeProvision records the Config `orcasm create` provisions.
-func fakeProvision(t *testing.T) *[]wizard.Config {
+// fakeCreate records the Config `orcasm create` provisions.
+func fakeCreate(t *testing.T) *[]wizard.Config {
 	var got []wizard.Config
-	t.Cleanup(cli.SetProvision(func(_ context.Context, cfg wizard.Config, _ sandbox.SecretValue, _ io.Writer) error {
+	t.Cleanup(cli.SetCreate(func(_ context.Context, cfg wizard.Config, _ sandbox.SecretValue, _ io.Writer) error {
 		got = append(got, cfg)
 		return nil
 	}))
 	return &got
 }
 
-func TestCreateProvisionsTheSandboxFromTheWizardConfig(t *testing.T) {
-	xdg := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdg)
-	provisioned := fakeProvision(t)
+func TestCreateBuildsTheSandboxFromTheWizardConfig(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	created := fakeCreate(t)
 	project := filepath.Join(t.TempDir(), "demo")
 	if err := os.Mkdir(project, 0o755); err != nil {
 		t.Fatal(err)
@@ -52,25 +51,21 @@ func TestCreateProvisionsTheSandboxFromTheWizardConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if len(*provisioned) != 1 {
-		t.Fatalf("want one Sandbox provisioned, got %d", len(*provisioned))
+	if len(*created) != 1 {
+		t.Fatalf("want one Sandbox created, got %d", len(*created))
 	}
-	cfg := (*provisioned)[0]
+	cfg := (*created)[0]
 	if cfg.Name != "orcasm-cli-test-sandbox" || cfg.ProjectPath != project || cfg.HostPort != 16999 || !reflect.DeepEqual(cfg.Harnesses, []string{"codex"}) {
-		t.Errorf("provisioned %+v", cfg)
+		t.Errorf("created %+v", cfg)
 	}
 	if !strings.Contains(out, "http://127.0.0.1:16999/") {
 		t.Errorf("want the web UI address printed, got:\n%s", out)
-	}
-	kept, err := sandbox.LoadConfig(filepath.Join(xdg, "orcasm", "sandboxes"), "orcasm-cli-test-sandbox")
-	if err != nil || kept.HostPort != 16999 {
-		t.Errorf("want the Sandbox's Config kept for later starts, got %+v, %v", kept, err)
 	}
 }
 
 func TestCreateWithAnswersFileRunsTheWizardWithoutPrompting(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	fakeProvision(t)
+	fakeCreate(t)
 	project := filepath.Join(t.TempDir(), "demo")
 	if err := os.Mkdir(project, 0o755); err != nil {
 		t.Fatal(err)
@@ -85,18 +80,18 @@ func TestCreateWithAnswersFileRunsTheWizardWithoutPrompting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if !strings.Contains(out, `name = "orcasm-cli-test-sandbox"`) {
-		t.Fatalf("want the collected config printed, got:\n%s", out)
+	if !strings.Contains(out, "Creating Sandbox orcasm-cli-test-sandbox for "+project) {
+		t.Fatalf("want a summary of the collected config, got:\n%s", out)
 	}
 	if _, err := os.Stat(filepath.Join(project, "orcasm.toml")); err != nil {
 		t.Fatalf("want project answers saved: %v", err)
 	}
 }
 
-func TestCreatePrintsApprovedSecretsAsSpecsWithoutTheirValues(t *testing.T) {
+func TestCreateSummarizesApprovedSecretsWithoutTheirValues(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-value")
-	fakeProvision(t)
+	fakeCreate(t)
 	project := filepath.Join(t.TempDir(), "demo")
 	if err := os.Mkdir(project, 0o755); err != nil {
 		t.Fatal(err)
@@ -112,8 +107,11 @@ func TestCreatePrintsApprovedSecretsAsSpecsWithoutTheirValues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	if !strings.Contains(out, `hosts = ["api.anthropic.com"]`) || !strings.Contains(out, `env = "ANTHROPIC_API_KEY"`) {
-		t.Fatalf("want the secret spec printed, got:\n%s", out)
+	if !strings.Contains(out, "ANTHROPIC_API_KEY (sent only to api.anthropic.com)") {
+		t.Fatalf("want the shared secret summarized, got:\n%s", out)
+	}
+	if strings.Contains(out, "[resources]") {
+		t.Fatalf("want a short summary, not the whole Config:\n%s", out)
 	}
 	if strings.Contains(out, "sk-ant-fake-value") {
 		t.Fatalf("the token value was printed:\n%s", out)

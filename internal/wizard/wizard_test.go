@@ -287,7 +287,7 @@ func TestProjectAnswersComeFromACommittedOrcasmToml(t *testing.T) {
 func TestInteractiveRunAcceptsDefaultsAndTakesTypedAnswers(t *testing.T) {
 	dir := newProject(t, "my-app")
 	var out strings.Builder
-	// Without a terminal the Wizard asks line by line. Answer: projectPath (keep),
+	// Without a terminal the Wizard asks line by line. Answer: Project path (keep),
 	// name "typed", then keep every other default.
 	in := strings.NewReader("\ntyped\n" + strings.Repeat("\n", 20))
 	cfg, err := wizard.Run(wizard.Options{Host: fakeHost(dir), ConfigDir: t.TempDir(), In: in, Out: &out})
@@ -518,7 +518,7 @@ func TestInteractiveRunOffersTheHostsTokensAndGitIdentity(t *testing.T) {
 		"git -C " + dir + " config user.email": "ada@example.com\n",
 	})
 	var out strings.Builder
-	// Keep the projectPath, name, resources and port; confirm the harnesses (0);
+	// Keep the Project path, name, resources and port; confirm the harnesses (0);
 	// then in the sharing question toggle option 2 (ANTHROPIC_API_KEY) and 3
 	// (git identity), leaving 1 (GH_TOKEN) out, and confirm.
 	in := strings.NewReader(strings.Repeat("\n", 7) + "0\n" + "2\n3\n0\n")
@@ -535,5 +535,61 @@ func TestInteractiveRunOffersTheHostsTokensAndGitIdentity(t *testing.T) {
 	}
 	if want := (wizard.GitIdentity{Name: "Ada", Email: "ada@example.com"}); cfg.Git != want {
 		t.Fatalf("got %+v, want %+v", cfg.Git, want)
+	}
+}
+
+func unlinkedSSH(h wizard.Host) wizard.Host {
+	h.SSHConfigLinked = func() bool { return false }
+	return h
+}
+
+func TestLinkingTheUsersSSHConfigNeedsConsent(t *testing.T) {
+	for _, tc := range []struct {
+		answer string
+		want   bool
+	}{{"y\n", true}, {"n\n", false}, {"\n", false}} {
+		dir := newProject(t, "my-app")
+		var out strings.Builder
+		// Keep every answer up to the harnesses (confirmed with 0), then
+		// answer the ssh config question.
+		in := strings.NewReader(strings.Repeat("\n", 7) + "0\n" + tc.answer)
+		cfg, err := wizard.Run(wizard.Options{Host: unlinkedSSH(fakeHost(dir)), ConfigDir: t.TempDir(), In: in, Out: &out})
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+		if !strings.Contains(out.String(), "~/.ssh/config") {
+			t.Fatalf("want the ssh config question asked:\n%s", out.String())
+		}
+		if cfg.LinkSSHConfig != tc.want {
+			t.Errorf("answer %q: LinkSSHConfig = %v, want %v", tc.answer, cfg.LinkSSHConfig, tc.want)
+		}
+	}
+}
+
+func TestAnAlreadyLinkedSSHConfigIsNotAskedAbout(t *testing.T) {
+	dir := newProject(t, "my-app")
+	h := fakeHost(dir)
+	h.SSHConfigLinked = func() bool { return true }
+	var out strings.Builder
+	in := strings.NewReader(strings.Repeat("\n", 7) + "0\n")
+	if _, err := wizard.Run(wizard.Options{Host: h, ConfigDir: t.TempDir(), In: in, Out: &out}); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "~/.ssh/config") {
+		t.Errorf("asked about an ssh config already linked:\n%s", out.String())
+	}
+}
+
+func TestSSHConfigConsentIsAnAnswerButNeverRemembered(t *testing.T) {
+	dir := newProject(t, "my-app")
+	configDir := t.TempDir()
+	h := unlinkedSSH(fakeHost(dir))
+	cfg, err := runWith(t, h, configDir, "link_ssh_config = true\n")
+	if err != nil || !cfg.LinkSSHConfig {
+		t.Fatalf("cfg %+v, err %v; want LinkSSHConfig from the answers", cfg, err)
+	}
+	again, err := runWith(t, h, configDir, "")
+	if err != nil || again.LinkSSHConfig {
+		t.Fatalf("cfg %+v, err %v; consent must be given each time", again, err)
 	}
 }

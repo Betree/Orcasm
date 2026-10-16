@@ -34,6 +34,9 @@ type Host struct {
 	Output func(name string, args ...string) (string, error)
 	// OpenCodeAuthFile is OpenCode's auth.json ("" when there is none).
 	OpenCodeAuthFile string
+	// SSHConfigLinked reports whether ~/.ssh/config already includes
+	// orcasm's ssh config. Nil means it does (nothing to ask).
+	SSHConfigLinked func() bool
 }
 
 // Options configures one Wizard run.
@@ -101,6 +104,11 @@ func Run(opts Options) (Config, error) {
 			}
 			if err := ask.share(&cfg, offered, offeredGit); err != nil {
 				return Config{}, err
+			}
+			if h.SSHConfigLinked != nil && !h.SSHConfigLinked() {
+				if err := ask.linkSSHConfig(&cfg.LinkSSHConfig); err != nil {
+					return Config{}, err
+				}
 			}
 		}
 		var err error
@@ -172,6 +180,7 @@ func overlay(cfg *Config, a Config) {
 		cfg.Project.BringFiles = a.Project.BringFiles
 	}
 	set(&cfg.Git, a.Git)
+	set(&cfg.LinkSSHConfig, a.LinkSSHConfig)
 	if a.Secrets != nil {
 		cfg.Secrets = a.Secrets
 	}

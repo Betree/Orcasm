@@ -23,6 +23,10 @@ type Config struct {
 	// Git is the identity commits are made with in the Sandbox; empty means
 	// none was shared.
 	Git GitIdentity `toml:"git,omitempty"`
+	// LinkSSHConfig is the user's consent to add one Include line to
+	// ~/.ssh/config, so VS Code Remote-SSH lists the Sandbox. Asked only
+	// while that line is missing, and never remembered.
+	LinkSSHConfig bool `toml:"link_ssh_config,omitempty"`
 }
 
 // GitIdentity is a git user.name and user.email.
