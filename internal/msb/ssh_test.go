@@ -32,7 +32,7 @@ func TestSandboxHostKeyDerivesPublicKeyFromSandboxHostKey(t *testing.T) {
 	pub := keygen(t, filepath.Join(dir, "host_ed25519"))
 	want := strings.Join(strings.Fields(pub)[:2], " ")
 
-	got, err := msb.CLI{Home: home}.SandboxHostKey("demo")
+	got, err := msb.CLI{Home: home}.SandboxHostKey(context.Background(), "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestSandboxHostKeyDerivesPublicKeyFromSandboxHostKey(t *testing.T) {
 }
 
 func TestSandboxHostKeyUnknownSandbox(t *testing.T) {
-	if _, err := (msb.CLI{Home: t.TempDir()}).SandboxHostKey("nope"); err == nil {
+	if _, err := (msb.CLI{Home: t.TempDir()}).SandboxHostKey(context.Background(), "nope"); err == nil {
 		t.Fatal("expected error for unknown sandbox")
 	}
 }

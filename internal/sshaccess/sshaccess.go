@@ -25,7 +25,7 @@ type MSB interface {
 	AuthorizeSSHKey(ctx context.Context, pubKeyFile string) error
 	// SandboxHostKey returns the sandbox's SSH host public key
 	// ("<type> <base64>").
-	SandboxHostKey(name string) (string, error)
+	SandboxHostKey(ctx context.Context, name string) (string, error)
 }
 
 // Access manages SSH access to Sandboxes.
@@ -103,7 +103,7 @@ func (a Access) Add(ctx context.Context, name string) error {
 	if err := a.MSB.AuthorizeSSHKey(ctx, a.keyPath()+".pub"); err != nil {
 		return fmt.Errorf("authorize orcasm key in msb: %w", err)
 	}
-	hostKey, err := a.MSB.SandboxHostKey(name)
+	hostKey, err := a.MSB.SandboxHostKey(ctx, name)
 	if err != nil {
 		return fmt.Errorf("read host key of sandbox %s: %w", name, err)
 	}

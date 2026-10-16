@@ -30,7 +30,7 @@ func (f *fakeMSB) AuthorizeSSHKey(_ context.Context, pubKeyFile string) error {
 	return nil
 }
 
-func (f *fakeMSB) SandboxHostKey(name string) (string, error) {
+func (f *fakeMSB) SandboxHostKey(_ context.Context, name string) (string, error) {
 	if k, ok := f.hostKeys[name]; ok {
 		return k, nil
 	}

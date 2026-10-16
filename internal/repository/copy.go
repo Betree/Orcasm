@@ -96,6 +96,16 @@ const guestScript = `
 stage=$1 dest=$2 owner=$3 head=$4
 if [ -n "$(ls -A "$dest" 2>/dev/null)" ]; then echo "$dest already exists and is not empty" >&2; exit 1; fi
 mkdir -p "$dest"
+# Let other users (root via msb exec or ssh -o User=root) run git on the copy
+# without "dubious ownership" errors; upload-pack (host fetch) checks this too.
+# Done first: provisioning pre-creates dest owned by owner, and this script
+# runs as root.
+if [ "$(id -un)" != "$owner" ]; then
+  for safe in "$dest" "$dest/.git"; do # upload-pack checks the gitdir
+    git config --system --get-all safe.directory | grep -qxF "$safe" ||
+      git config --system --add safe.directory "$safe"
+  done
+fi
 cd "$dest"
 git init -q
 cat "$stage/config" >> .git/config
@@ -108,14 +118,6 @@ git reset -q --hard
 xargs -0 -r rm -rf -- < "$stage/deleted"
 tar -xf "$stage/worktree.tar"
 chown -R "$owner:" "$dest"
-# Let other users (root via msb exec or ssh -o User=root) run git on the copy
-# without "dubious ownership" errors; upload-pack (host fetch) checks this too.
-if [ "$(id -un)" != "$owner" ]; then
-  for safe in "$dest" "$dest/.git"; do # upload-pack checks the gitdir
-    git config --system --get-all safe.directory | grep -qxF "$safe" ||
-      git config --system --add safe.directory "$safe"
-  done
-fi
 `
 
 // packWorkingTree writes a tar of every non-ignored file in the host working

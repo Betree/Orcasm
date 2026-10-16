@@ -3,6 +3,7 @@ package msb
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -17,12 +18,19 @@ func (c CLI) AuthorizeSSHKey(ctx context.Context, pubKeyFile string) error {
 // SandboxHostKey returns the sandbox's SSH host public key ("<type> <base64>"),
 // derived from msb's per-sandbox host key file (an msb-internal path, stable
 // across restarts and regenerated on recreate; see microsandbox.md §11).
-func (c CLI) SandboxHostKey(name string) (string, error) {
+//
+// msb 0.7.8 only generates that key on the sandbox's first `msb ssh serve`,
+// so a serve with no client is run first when it is missing (its handshake
+// failure is expected).
+func (c CLI) SandboxHostKey(ctx context.Context, name string) (string, error) {
 	home, err := c.home()
 	if err != nil {
 		return "", err
 	}
 	path := filepath.Join(home, "sandboxes", name, "ssh", "host_ed25519")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		_ = c.run(ctx, call{args: []string{"ssh", "serve", name, "--stdio"}, stdin: strings.NewReader("")})
+	}
 	out, err := exec.Command("ssh-keygen", "-y", "-f", path).CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("ssh-keygen -y -f %s: %w: %s", path, err, strings.TrimSpace(string(out)))
