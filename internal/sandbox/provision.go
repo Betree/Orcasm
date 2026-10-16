@@ -82,6 +82,10 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	if err != nil {
 		return err
 	}
+	stackArgv, err := stackInstallArgv(main, cfg.Project.ComposeFiles)
+	if err != nil {
+		return err
+	}
 	opts := msb.CreateOptions{
 		Image: Image,
 		Name:  cfg.Name,
@@ -111,6 +115,10 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	if err := m.ExecStreaming(ctx, cfg.Name, "", out, argv...); err != nil {
 		return fmt.Errorf("provision Sandbox %s (kept for inspection; `msb rm --force %s` to discard): %w",
 			cfg.Name, cfg.Name, err)
+	}
+	fmt.Fprintln(out, "==> Installing the stack command for Main's Stack")
+	if err := m.ExecStreaming(ctx, cfg.Name, "", out, stackArgv...); err != nil {
+		return fmt.Errorf("install stack in Sandbox %s: %w", cfg.Name, err)
 	}
 	return nil
 }

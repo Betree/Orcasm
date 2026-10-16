@@ -102,8 +102,8 @@ func TestProvisionRunsTheProvisioningScriptAsRoot(t *testing.T) {
 	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.execs) != 1 {
-		t.Fatalf("want one exec, got %+v", f.execs)
+	if len(f.execs) == 0 {
+		t.Fatalf("want the provisioning exec first, got none")
 	}
 	c := f.execs[0]
 	if c.name != "demo" || c.user != "" {
