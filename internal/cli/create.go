@@ -56,7 +56,11 @@ func newCreateCmd(BuildInfo) *cobra.Command {
 				return err
 			}
 			// Starting the Sandbox again needs its secret specs.
-			if err := sandbox.SaveConfig(filepath.Join(userConfig, "orcasm", "sandboxes"), cfg); err != nil {
+			dir, err := sandboxConfigDir()
+			if err != nil {
+				return err
+			}
+			if err := sandbox.SaveConfig(dir, cfg); err != nil {
 				return err
 			}
 			fmt.Fprintf(out, "Sandbox %s is ready. Orca's web UI is served on http://127.0.0.1:%d/\n", cfg.Name, cfg.HostPort)
@@ -68,4 +72,13 @@ func newCreateCmd(BuildInfo) *cobra.Command {
 	cmd.Flags().StringVar(&answersFile, "answers", "", "answers file (TOML) for a non-interactive run")
 	_ = cmd.Flags().MarkHidden("answers")
 	return cmd
+}
+
+// sandboxConfigDir holds the Config each Sandbox was created from.
+func sandboxConfigDir() (string, error) {
+	userConfig, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(userConfig, "orcasm", "sandboxes"), nil
 }

@@ -33,7 +33,9 @@ func (f *fakeCreateMSB) Create(_ context.Context, opts msb.CreateOptions) error 
 	return f.createErr
 }
 
-func (f *fakeCreateMSB) List(context.Context, ...string) ([]msb.Listing, error) { return f.existing, nil }
+func (f *fakeCreateMSB) List(context.Context, ...string) ([]msb.Listing, error) {
+	return f.existing, nil
+}
 
 func (f *fakeCreateMSB) Remove(_ context.Context, name string) error {
 	f.removed = append(f.removed, name)

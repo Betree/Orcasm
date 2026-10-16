@@ -53,3 +53,40 @@ func TestRemoveConfigForgetsTheSandbox(t *testing.T) {
 		t.Errorf("removing twice: %v", err)
 	}
 }
+
+func TestSecretEnvSuppliesEachKeptSecretFromTheHost(t *testing.T) {
+	dir := t.TempDir()
+	cfg := demoConfig()
+	cfg.Secrets = []wizard.Secret{{Name: "GH_TOKEN", Hosts: []string{"github.com"}}}
+	if err := sandbox.SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	env, err := sandbox.SecretEnv(dir, "demo", hostValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"GH_TOKEN=ghp_from_host"}; !reflect.DeepEqual(env, want) {
+		t.Errorf("env %q, want %q", env, want)
+	}
+}
+
+func TestSecretEnvFailsWhenTheHostLostAValue(t *testing.T) {
+	dir := t.TempDir()
+	cfg := demoConfig()
+	cfg.Secrets = []wizard.Secret{{Name: "OPENAI_API_KEY", Hosts: []string{"api.openai.com"}}}
+	if err := sandbox.SaveConfig(dir, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sandbox.SecretEnv(dir, "demo", hostValues); err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+		t.Fatalf("want an error naming the secret, got %v", err)
+	}
+}
+
+// Sandboxes created before their Config was kept start without secrets.
+func TestSecretEnvOfASandboxWithoutKeptConfigIsEmpty(t *testing.T) {
+	env, err := sandbox.SecretEnv(t.TempDir(), "old", hostValues)
+	if err != nil || len(env) != 0 {
+		t.Fatalf("env %q, err %v; want none", env, err)
+	}
+}

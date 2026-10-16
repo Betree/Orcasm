@@ -66,6 +66,9 @@ type Manager struct {
 	// the named Sandbox: msb reads each secret's value from a host variable
 	// on every start, so the values must be supplied again. Nil means none.
 	StartEnv func(ctx context.Context, name string) ([]string, error)
+	// ConfigDir holds the Configs Sandboxes were created from (SaveConfig);
+	// Remove forgets them. Empty means none are kept.
+	ConfigDir string
 	// Poll is how often URL rereads Orca's log while waiting (default 1s).
 	Poll time.Duration
 }

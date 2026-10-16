@@ -47,3 +47,25 @@ func RemoveConfig(dir, name string) error {
 	}
 	return nil
 }
+
+// SecretEnv is the "NAME=VALUE" environment `msb start` needs for Sandbox
+// name: each kept secret spec valued from the host. A Sandbox without a kept
+// Config has no secrets.
+func SecretEnv(dir, name string, value SecretValue) ([]string, error) {
+	cfg, err := LoadConfig(dir, name)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var env []string
+	for _, s := range cfg.Secrets {
+		v, err := value(s)
+		if err != nil {
+			return nil, fmt.Errorf("secret %s: %w", s.Name, err)
+		}
+		env = append(env, s.Name+"="+v)
+	}
+	return env, nil
+}

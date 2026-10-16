@@ -17,6 +17,7 @@ import (
 	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/sandbox"
 	"github.com/Betree/Orcasm/internal/sshaccess"
+	"github.com/Betree/Orcasm/internal/wizard"
 )
 
 // urlWait bounds how long `url` (and bare `orcasm` after a start) waits for
@@ -37,9 +38,18 @@ func newManager() (sandbox.Manager, error) {
 	if err != nil {
 		return sandbox.Manager{}, err
 	}
-	// StartEnv stays nil until the Sandbox's secret specs are stored at
-	// creation (#12); see the layout notes.
-	return sandbox.Manager{MSB: msb.CLI{}, SSH: ssh}, nil
+	dir, err := sandboxConfigDir()
+	if err != nil {
+		return sandbox.Manager{}, err
+	}
+	startEnv := func(_ context.Context, name string) ([]string, error) {
+		host, err := wizard.NewHost()
+		if err != nil {
+			return nil, err
+		}
+		return sandbox.SecretEnv(dir, name, host.SecretValue)
+	}
+	return sandbox.Manager{MSB: msb.CLI{}, SSH: ssh, ConfigDir: dir, StartEnv: startEnv}, nil
 }
 
 // sandboxArg is the Sandbox named in args or, without one, the current

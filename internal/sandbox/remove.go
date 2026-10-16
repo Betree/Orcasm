@@ -19,7 +19,7 @@ type RemoveOptions struct {
 }
 
 // Remove deletes the named Sandbox and the host state pointing at it: its SSH
-// entry and the `orcasm-<name>` git remote in the Project. Unless forced, it
+// entry, its kept Config and the `orcasm-<name>` git remote in the Project. Unless forced, it
 // first looks for unsaved work in Main and the Worktrees and refuses if any
 // is found (or cannot be ruled out) and Confirm does not approve.
 func (m Manager) Remove(ctx context.Context, name string, opts RemoveOptions) error {
@@ -44,6 +44,11 @@ func (m Manager) Remove(ctx context.Context, name string, opts RemoveOptions) er
 	if m.SSH != nil {
 		if err := m.SSH.Remove(name); err != nil {
 			errs = append(errs, fmt.Errorf("removing SSH entry: %w", err))
+		}
+	}
+	if m.ConfigDir != "" {
+		if err := RemoveConfig(m.ConfigDir, name); err != nil {
+			errs = append(errs, fmt.Errorf("forgetting its config: %w", err))
 		}
 	}
 	if s.Folder != "" {
