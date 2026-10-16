@@ -39,6 +39,21 @@ func olderLayer(t *testing.T, top string) (f *fixture, ups *int) {
 	must(t, err)
 	must(t, os.WriteFile(saved, raw, 0o644))
 
+	return f, runningAs(f, top)
+}
+
+func savedLayer(t *testing.T, f *fixture) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(f.hooks.StateDir("feat-login"), "stack.json"))
+	must(t, err)
+	var st stack.Stack
+	must(t, json.Unmarshal(raw, &st))
+	return st.Layer
+}
+
+// runningAs makes the Workbench run as c0ffee with processes top, and
+// counts the Stack's `up`s.
+func runningAs(f *fixture, top string) (ups *int) {
 	ups = new(int)
 	f.docker.reply = func(args []string) (string, error) {
 		switch {
@@ -51,16 +66,7 @@ func olderLayer(t *testing.T, top string) (f *fixture, ups *int) {
 		}
 		return "", nil
 	}
-	return f, ups
-}
-
-func savedLayer(t *testing.T, f *fixture) string {
-	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(f.hooks.StateDir("feat-login"), "stack.json"))
-	must(t, err)
-	var st stack.Stack
-	must(t, json.Unmarshal(raw, &st))
-	return st.Layer
+	return ups
 }
 
 func TestAnIdleWorkbenchFromAnOlderOrcasmIsRecreatedAtTheNextAgentLaunch(t *testing.T) {
@@ -74,8 +80,8 @@ func TestAnIdleWorkbenchFromAnOlderOrcasmIsRecreatedAtTheNextAgentLaunch(t *test
 	if *ups != 1 {
 		t.Errorf("the Stack was brought up %d times, want once", *ups)
 	}
-	if got := savedLayer(t, f); got != stack.Layer {
-		t.Errorf("saved Stack has layer %q, want %q", got, stack.Layer)
+	if got := savedLayer(t, f); got == "" {
+		t.Error("the regenerated Stack has no layer recorded")
 	}
 	if !strings.Contains(progress.String(), "Updating") {
 		t.Errorf("progress %q does not say the Workbench is updated", progress.String())
@@ -93,8 +99,30 @@ func TestAWorkbenchWithAnAgentRunningKeepsItsOlderLayer(t *testing.T) {
 	if *ups != 0 {
 		t.Errorf("the Stack was brought up %d times under a running agent", *ups)
 	}
-	if got := savedLayer(t, f); got == stack.Layer {
-		t.Error("recorded the new layer without recreating the Workbench")
+	if got := savedLayer(t, f); got != "" {
+		t.Errorf("recorded layer %q without recreating the Workbench", got)
+	}
+}
+
+func TestAWorkbenchIsRecreatedWhenWhatOrcasmPutsInItChanged(t *testing.T) {
+	// `orcasm upgrade` rewrote the Sandbox's settings (here a new secret):
+	// the override would differ, with no revision bumped by hand.
+	f := newFixture(t)
+	ctx := context.Background()
+	path := "/worktrees/shop/feat-login"
+	must(t, f.hooks.Setup(ctx, path, io.Discard))
+	before := savedLayer(t, f)
+	ups := runningAs(f, "PID COMMAND\n41 sleep infinity\n")
+	f.hooks.Config.Secrets = append(f.hooks.Config.Secrets, "NPM_TOKEN")
+
+	if _, err := f.hooks.Workbench(ctx, path, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if *ups != 1 {
+		t.Errorf("the Stack was brought up %d times, want once", *ups)
+	}
+	if after := savedLayer(t, f); after == before {
+		t.Error("the saved layer did not change")
 	}
 }
 

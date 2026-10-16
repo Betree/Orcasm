@@ -249,6 +249,45 @@ func TestWithoutAWorkbenchServiceTheGenericOneIsAdded(t *testing.T) {
 	}
 }
 
+func TestAFreshStackHasTheWorkbenchLayerThisOrcasmGenerates(t *testing.T) {
+	for _, workbench := range []string{"app", ""} {
+		s := spec(t)
+		s.Workbench = workbench
+		st, _, _ := generate(t, s, "app", "db")
+		if st.Outdated(s) {
+			t.Errorf("Workbench %q: a Stack just generated is outdated", workbench)
+		}
+	}
+}
+
+func TestAStackIsOutdatedOnceThisOrcasmWouldGenerateAnotherOverride(t *testing.T) {
+	// E.g. a newer orcasm mounts or sets something else in Workbenches, or
+	// the Sandbox's harnesses or secrets changed: no revision to bump.
+	s := spec(t)
+	st, _, _ := generate(t, s, "app", "db")
+
+	changed := s
+	changed.Secrets = []string{"GH_TOKEN"}
+	if !st.Outdated(changed) {
+		t.Error("a Stack generated without the secret is not outdated")
+	}
+	changed = s
+	changed.Harnesses = []string{"claude"}
+	if !st.Outdated(changed) {
+		t.Error("a Stack generated without the harness is not outdated")
+	}
+}
+
+func TestAStackSavedWithoutALayerIsOutdated(t *testing.T) {
+	// Saved by an orcasm before Workbench layers were recorded.
+	s := spec(t)
+	st, _, _ := generate(t, s, "app", "db")
+	st.Layer = ""
+	if !st.Outdated(s) {
+		t.Error("not outdated")
+	}
+}
+
 func TestAWorkbenchServiceMissingFromTheComposeFilesIsRefused(t *testing.T) {
 	_, err := stack.Generate(context.Background(), (&fakeDocker{services: []string{"db"}}).run, spec(t), t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "app") {
