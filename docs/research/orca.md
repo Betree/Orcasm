@@ -105,8 +105,8 @@ installed AppImage (v1.4.224, mounted at `/tmp/.mount_orca.*`, CLI `resources/bi
   ([browser-client-page-renderer-installation.ts](R/src/renderer/src/components/browser-pane/browser-client-page-renderer-installation.ts)).
   The pages therefore run **server-side** and reach the browser as a **CDP screencast stream**, with
   input forwarded back (`components/browser-pane/stream-remote/*`,
-  `shared/browser-screencast-protocol`). This is inferred from source; the docs don't state it for the
-  web client.
+  `shared/browser-screencast-protocol`). Confirmed hands-on in issue #6 (see "Spike: pairing a real
+  browser" below).
 - Where the server-side browser runs:
   - Electron serve: hidden offscreen BrowserWindows on the Xvfb display.
   - orcad: an "external Chromium" process (`src/main/orcad/external-chromium-*.ts`). The AppImage also
@@ -514,7 +514,7 @@ msb create ghcr.io/superradcompany/ubuntu-systemd:24.04 --name orcasm-spike-1 --
   | `/assets/web-B7Yx-qEs.js` | 200, 191 KB |
 
 - Memory: about 700 MiB RSS for all of the `orca` user's processes, Xvfb included, while idle. Guest "used" memory was 478 MiB.
-- Packages needed for Electron serve: only the `.deb` plus its declared Depends (which include `xvfb`), and **`libasound2t64`**. Nothing else was needed for serve to start and serve the web client. Not tested: the server-side browser screencast, and an actual browser pairing session.
+- Packages needed for Electron serve: only the `.deb` plus its declared Depends (which include `xvfb`), and **`libasound2t64`**. Nothing else was needed for serve to start and serve the web client. The server-side browser screencast and a real pairing session were tested later (issue #6, below).
 
 ### 5. Guest bind address and msb publishing
 
@@ -546,6 +546,54 @@ ssh -F /dev/null -o IdentityAgent=none -o IdentitiesOnly=yes -i spike_key \
 - Publish with `-p 127.0.0.1:<hostport>:6768`. The host's own Orca already listens on `0.0.0.0:6768`, so the host port must differ.
 - Read the `Web client URL` from the serve log. It contains the pairing secret in the fragment.
 - SSH works for editors and tools through `ProxyCommand msb ssh serve NAME --stdio`. Key authorization is global to `MSB_HOME`.
+
+## Spike: pairing a real browser and the integrated browser (issue #6, 2026-10-16)
+
+Hands-on on the Linux host: sandbox `spike6-orca` (same image and flags as above, `-p 127.0.0.1:16866:6768`),
+Orca v1.4.227 `.deb` + `libasound2t64`, `ORCA_SERVE_RUNTIME=electron orca-ide serve --port 6768
+--pairing-address 127.0.0.1:16866` as user `orca`. The browser was **headless Chromium 156 driven by
+Playwright on the host** (no Chrome extension was available), so everything below was seen through
+screenshots and DOM text, not by a human. The sandbox was deleted afterwards.
+
+### Verified
+
+| Step | Result |
+|---|---|
+| Open the `Web client URL` from the host | Paired with no prompt; full UI, status bar "1 host". All traffic is WebSockets to `ws://127.0.0.1:16866/` (same port as the page). |
+| Reload the bare URL (no `#pairing=`) in the same profile | Still paired: the client stores the credential in browser storage. |
+| Bare URL in a fresh profile | "Connect to Orca" form (Server name, Pairing URL or code, Connect). |
+| Same pairing URL in a second fresh profile | Also paired. The code is **reusable**, not one-shot. |
+| Project + worktree | `orca-ide repo add --path ~/proj`, then `orca-ide worktree create --repo path:... --name feat-a --activate` from inside the guest; it showed up live in the web UI. The UI folder picker was not tried. |
+| Terminal tab | Opened by default in the worktree; typed keys reached the shell (`echo spike6-$((6*7)) && whoami` gave `spike6-42` / `orca`). |
+| Agent tab | The "+" menu lists New Terminal / New Browser Tab / New Markdown, then detected agents. With no agent it shows "No agents detected". After installing Claude Code into `~orca/.local/bin` (no Orca restart) it listed "Claude" and "Claude Agent Teams"; choosing Claude opened a tab running the Claude Code TUI. |
+| Integrated browser | "New Browser Tab", URL `http://localhost:3000/`, served by `python3 -m http.server --bind 127.0.0.1` **inside the guest** (not published): the page rendered. It arrives as an `<img src="blob:...">` that is updated from the WebSocket (a server-side screencast), not as an iframe. |
+| Input to the streamed page | Reload button and a click on a link both worked; the guest dev server logged `GET /clicked.html`. |
+| Agent CLI on the same browser | `orca-ide tab list` / `orca-ide get --what title` in the guest saw the same tab (`spike6 clicked — http://localhost:3000/clicked.html`). |
+| Tabs survive the client | Browser and terminal tabs stayed open server-side across separate browser sessions, and across a `serve` restart (terminals live in a separate `daemon-entry.js` process that outlives serve). |
+
+Memory: about 0.95 GiB RSS for the `orca` user with one browser tab and a Claude TUI open (about 0.7 GiB when idle).
+
+### Pairing URL facts (for `orcasm url`, issue #15)
+
+- The serve log line is exactly `Web client URL: http://<pairing-address>/web-index.html#pairing=<urlencoded orca://pair?code=...>`.
+  It appears once, about 2-3 s after start. It sits next to `Pairing URL: orca://pair?code=...`, which is the same
+  string, decoded. To read it: take the **last** line starting with `Web client URL: ` and strip that prefix.
+- `code` is base64url JSON `{v:2, endpoint:"ws://127.0.0.1:16866", deviceToken, publicKeyB64, pairedDeviceId, scope:"runtime"}`.
+  It is a bearer device token, not a short-lived offer.
+- **Each `serve` start mints a new device** (`~/.config/orca/orca-devices.json` gains an entry named
+  "CLI <date>"), so the URL changes on every restart. **Old URLs and already-paired browsers keep working** after a
+  restart, because devices persist until they are revoked (Settings → Remote Orca Servers → Shared Server Access).
+  `orcasm url` must read the log of the *current* serve run, but a stale URL is not broken, just a different device.
+  Repeated restarts add one device each; consider `--no-pairing` after the first run, or pruning.
+- The `endpoint` inside the code is the `--pairing-address`, so the host port is baked in. If the host port changes, previously
+  issued URLs point to the wrong port.
+
+### Operational notes
+
+- Stop serve with `SIGTERM` to the `orca-ide .../out/cli/index.js serve` parent; it takes down the Electron tree.
+  `pkill -f 'orca-ide serve'` launched through `bash -c '<script containing that text>'` matches the shell itself.
+- Not verified: a human in a real desktop Chrome/Firefox (clipboard, IME, drag and drop), screencast quality and
+  latency under load, the UI "Add project" folder picker, and agent login flows.
 
 ## Hooks without committed orca.yaml / multi-repo
 
