@@ -1,0 +1,58 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+project_name: orcasm
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./...
+
+builds:
+  - id: orcasm
+    main: ./cmd/orcasm
+    binary: orcasm
+    env:
+      - CGO_ENABLED=0 # static binary (ADR 0004)
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X main.date={{.Date}}
+
+archives:
+  - id: orcasm
+    formats: [tar.gz]
+    # install.sh relies on this exact name: orcasm_<os>_<arch>.tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE*, README*]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:"]
+
+release:
+  github:
+    owner: Betree
+    name: Orcasm
+
+homebrew_casks:
+  - name: orcasm
+    repository:
+      owner: Betree
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/Betree/Orcasm
+    description: Give a project an isolated VM where many coding agents work in parallel
+    binaries: [orcasm]
+    hooks:
+      post:
+        # Binaries are not notarized; drop the quarantine flag so macOS runs them.
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/orcasm"]
+          end
