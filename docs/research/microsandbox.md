@@ -260,6 +260,17 @@ Tested 2026-10-16 on this host with msb 0.7.8, `ubuntu-systemd:24.04`, `--init a
 4. **Hook into the user's config:** add one `Include ~/.orcasm/ssh/config` line to `~/.ssh/config`, so VS Code Remote-SSH lists the hosts. Alternatively, point VS Code's `remote.SSH.configFile` setting at orcasm's file.
 5. **Root access:** keep root out of the `Host` entry. When root is needed, use `msb exec` (default user root) or `ssh -o User=root`.
 
+## 12. Lifecycle commands (issue #15, tested on 0.7.8)
+
+Tested on throwaway `spike15-*` sandboxes, removed afterwards.
+
+- **Labels:** a bare `msb ls --label orcasm` does **not** match `orcasm=1` (it matches the empty value only), so orcasm always selects `orcasm=1`. Values may hold slashes and spaces (`orcasm.folder=/home/x/my proj` is stored and matched exactly). `msb list --format json` gives `name`, `status` (`Running`/`Stopped`), `image`, `created_at`, but no labels; `msb inspect --format json` has them under `config.labels`, with the image's `org.opencontainers.*` labels mixed in. An unmatched selector prints `[]`.
+- **Changing labels:** `msb modify --label` works on a stopped sandbox; on a running one it refuses unless `--restart` or `--next-start` is given.
+- **start/stop:** `msb stop` on a stopped sandbox succeeds; `msb start` on a running one fails (`already running`). Stop and start of a small sandbox take well under a second. An enabled systemd unit (e.g. `orca.service`) comes back on start, but `systemctl` reports "Failed to connect to bus" for the first moments after `msb start` returns, so readers must retry.
+- **`msb exec` on a stopped sandbox succeeds**, in a transient boot **without systemd** (`systemctl` says "not booted with systemd"); the status stays `Stopped`. The persisted root filesystem is visible, so file and git reads work, but services do not.
+- **Without `--init auto`**, the ubuntu-systemd image does not run systemd as PID 1.
+- **Pairing URL of the current Orca run:** `systemctl show -p InvocationID --value orca` then `journalctl -o cat _SYSTEMD_INVOCATION_ID=<id>` prints only the current run's lines, so a restart's new `Web client URL:` replaces the old one.
+
 ---
 
 ## Unknown / unverified

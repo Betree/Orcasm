@@ -1,0 +1,136 @@
+// Package sandbox creates and manages Sandboxes: the msb sandboxes orcasm
+// made, found through the labels it puts on them.
+package sandbox
+
+import (
+	"context"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/Betree/Orcasm/internal/msb"
+)
+
+// Labels orcasm puts on every Sandbox it creates (msb `--label KEY=VALUE`).
+const (
+	// LabelOrcasm marks a Sandbox as orcasm's. Its value is always "1": msb
+	// matches a bare `--label orcasm` selector against an empty value only.
+	LabelOrcasm = "orcasm"
+	// LabelFolder holds the Project folder on the host (absolute).
+	LabelFolder = "orcasm.folder"
+	// LabelMain holds Main's absolute path in the guest.
+	LabelMain = "orcasm.main"
+)
+
+// CreateLabels returns the `--label` values to create a Sandbox with, for the
+// Project at folder (absolute, on the host) whose Main lives at main in the
+// guest.
+func CreateLabels(folder, main string) []string {
+	return []string{LabelOrcasm + "=1", LabelFolder + "=" + folder, LabelMain + "=" + main}
+}
+
+// MSB is the part of microsandbox the lifecycle needs. msb.CLI implements it.
+type MSB interface {
+	List(ctx context.Context, labels ...string) ([]msb.Listing, error)
+	Labels(ctx context.Context, name string) (map[string]string, error)
+	// Start boots a sandbox with env added to msb's environment.
+	Start(ctx context.Context, name string, env []string) error
+	Stop(ctx context.Context, name string, force bool) error
+	Remove(ctx context.Context, name string) error
+	Exec(ctx context.Context, name, user string, argv ...string) (string, error)
+}
+
+// Sandbox is one of orcasm's Sandboxes as the host sees it.
+type Sandbox struct {
+	Name   string
+	Status string // msb.Running, msb.Stopped, or another msb status
+	Folder string // Project folder on the host
+	Main   string // Main's path in the guest
+}
+
+// Running reports whether the Sandbox's VM is up.
+func (s Sandbox) Running() bool { return s.Status == msb.Running }
+
+// SSHEntries drops a Sandbox's host SSH entry. sshaccess.Access implements it.
+type SSHEntries interface {
+	Remove(name string) error
+}
+
+// Manager drives the lifecycle of Sandboxes.
+type Manager struct {
+	MSB MSB
+	// SSH is only needed to remove Sandboxes.
+	SSH SSHEntries
+	// StartEnv returns the "KEY=VALUE" host environment `msb start` needs for
+	// the named Sandbox: msb reads each secret's value from a host variable
+	// on every start, so the values must be supplied again. Nil means none.
+	StartEnv func(ctx context.Context, name string) ([]string, error)
+	// Poll is how often URL rereads Orca's log while waiting (default 1s).
+	Poll time.Duration
+}
+
+// List returns every Sandbox, sorted by name.
+func (m Manager) List(ctx context.Context) ([]Sandbox, error) {
+	return m.list(ctx, LabelOrcasm+"=1")
+}
+
+// InFolder returns the Sandboxes of the Project at folder (absolute).
+func (m Manager) InFolder(ctx context.Context, folder string) ([]Sandbox, error) {
+	return m.list(ctx, LabelOrcasm+"=1", LabelFolder+"="+folder)
+}
+
+// Get returns the named Sandbox. A sandbox orcasm did not make is not one.
+func (m Manager) Get(ctx context.Context, name string) (Sandbox, error) {
+	all, err := m.List(ctx)
+	if err != nil {
+		return Sandbox{}, err
+	}
+	for _, s := range all {
+		if s.Name == name {
+			return s, nil
+		}
+	}
+	return Sandbox{}, fmt.Errorf("no Sandbox named %q (see `orcasm ls`)", name)
+}
+
+// Start boots the named Sandbox; Orca's service starts with it. Starting a
+// running Sandbox does nothing.
+func (m Manager) Start(ctx context.Context, name string) error {
+	s, err := m.Get(ctx, name)
+	if err != nil || s.Running() {
+		return err
+	}
+	var env []string
+	if m.StartEnv != nil {
+		if env, err = m.StartEnv(ctx, name); err != nil {
+			return fmt.Errorf("secrets for %q: %w", name, err)
+		}
+	}
+	return m.MSB.Start(ctx, name, env)
+}
+
+// Stop shuts the named Sandbox down: gracefully, or at once with force.
+func (m Manager) Stop(ctx context.Context, name string, force bool) error {
+	if _, err := m.Get(ctx, name); err != nil {
+		return err
+	}
+	return m.MSB.Stop(ctx, name, force)
+}
+
+func (m Manager) list(ctx context.Context, labels ...string) ([]Sandbox, error) {
+	listed, err := m.MSB.List(ctx, labels...)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Sandbox, 0, len(listed))
+	for _, l := range listed {
+		labels, err := m.MSB.Labels(ctx, l.Name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, Sandbox{Name: l.Name, Status: l.Status, Folder: labels[LabelFolder], Main: labels[LabelMain]})
+	}
+	slices.SortFunc(out, func(a, b Sandbox) int { return strings.Compare(a.Name, b.Name) })
+	return out, nil
+}
