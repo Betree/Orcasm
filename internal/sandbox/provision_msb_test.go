@@ -59,13 +59,14 @@ func TestProvisionARealSandbox(t *testing.T) {
 	checks := `pwd; stat -c %U "$PWD"; id -nG | tr ' ' '\n' | grep -x docker
 for c in git rsync curl gh claude codex opencode; do command -v $c >/dev/null || echo "missing $c"; done
 docker run --rm hello-world >/dev/null && echo docker-ok
+env -i PATH=/usr/bin:/bin curl -fsS -o /dev/null https://github.com && echo tls-ok
 systemctl is-active orca; ps -o user= -C orca-ide | sort -u
 git config user.name; echo "$ORCASM_TEST_TOKEN"`
 	out, err := sb.Exec(ctx, sandbox.User, "bash", "-lc", checks)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\n"
+	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\ntls-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\n"
 	if out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}

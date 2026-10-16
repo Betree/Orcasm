@@ -17,11 +17,29 @@ apt-get install -y -qq --no-install-recommends >/dev/null \
   nodejs npm \
   libasound2t64
 
-# Node keeps its own CA list; point it at the system store, which holds msb's
-# TLS-interception CA when secrets are configured (docs/research/microsandbox.md §6).
+step "Trusting microsandbox's TLS-interception CA"
+# With secrets, msb intercepts TLS with its own CA (docs/research/microsandbox.md §6).
+# msb drops it in /usr/local/share/ca-certificates at boot; install it there
+# ourselves too (from msb's runtime mount) so update-ca-certificates keeps it
+# in the system store whatever the boot order, for git, curl, gh, Docker's
+# daemon and anything else using OpenSSL/GnuTLS/Go defaults.
 ca_bundle=/etc/ssl/certs/ca-certificates.crt
-grep -q '^NODE_EXTRA_CA_CERTS=' /etc/environment || echo "NODE_EXTRA_CA_CERTS=$ca_bundle" >>/etc/environment
+msb_ca=/.msb/tls/ca.pem
+if [ -s "$msb_ca" ]; then
+  install -m 0644 "$msb_ca" /usr/local/share/ca-certificates/microsandbox-ca.crt
+fi
 update-ca-certificates >/dev/null
+# Tools with their own CA list read these; msb exec sets them, but SSH
+# sessions and systemd services (Orca, agents) only see /etc/environment.
+# Docker containers keep their own CA bundles: Workbenches must mount
+# $ca_bundle (or the CA) themselves.
+for var in NODE_EXTRA_CA_CERTS SSL_CERT_FILE CURL_CA_BUNDLE REQUESTS_CA_BUNDLE; do
+  grep -q "^$var=" /etc/environment || echo "$var=$ca_bundle" >>/etc/environment
+done
+if [ -s "$msb_ca" ] && ! curl -fsS -o /dev/null --cacert "$ca_bundle" https://github.com; then
+  echo "the system CA store does not trust msb's TLS interception" >&2
+  exit 1
+fi
 
 step "Creating user $user"
 if ! id "$user" >/dev/null 2>&1; then
@@ -83,7 +101,7 @@ User=$user
 WorkingDirectory=/home/$user
 Environment=ORCA_SERVE_RUNTIME=electron
 Environment=PATH=/home/$user/.local/bin:/usr/local/bin:/usr/bin:/bin
-Environment=NODE_EXTRA_CA_CERTS=$ca_bundle
+Environment=NODE_EXTRA_CA_CERTS=$ca_bundle SSL_CERT_FILE=$ca_bundle CURL_CA_BUNDLE=$ca_bundle REQUESTS_CA_BUNDLE=$ca_bundle
 ExecStart=/usr/bin/orca-ide serve --port 6768 --pairing-address 127.0.0.1:$hostport
 Restart=on-failure
 RestartSec=10
