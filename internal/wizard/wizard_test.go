@@ -1,10 +1,12 @@
 package wizard_test
 
 import (
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Betree/Orcasm/internal/wizard"
@@ -19,7 +21,7 @@ func fakeHost(cwd string) wizard.Host {
 		MemoryGiB:     32,
 		Harnesses:     []string{"claude", "codex"},
 		SandboxExists: func(string) bool { return false },
-		PortFree:      func(int) bool { return true },
+		FirstFreePort: func(start int) (int, error) { return start, nil },
 	}
 }
 
@@ -89,7 +91,7 @@ func TestDefaultMemoryIsHalfTheHostButLeavesAtLeast8GiB(t *testing.T) {
 
 func TestDefaultHostPortIsFirstFreeFrom6768(t *testing.T) {
 	h := fakeHost(newProject(t, "app"))
-	h.PortFree = func(p int) bool { return p > 6769 }
+	h.FirstFreePort = func(start int) (int, error) { return max(start, 6770), nil }
 	cfg, err := runWith(t, h, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
@@ -202,7 +204,7 @@ func TestProjectAnswersMustMatchTheComposeFiles(t *testing.T) {
 	for _, answers := range []string{
 		`[project]` + "\n" + `compose_files = ["missing.yaml"]`,
 		`[project]` + "\n" + `workbench = "nope"`,
-		`[project]` + "\n" + `workbench = "db"`, // db is only in compose.test.yml, not picked
+		`[project]` + "\n" + `workbench = "db"`,    // db is only in compose.test.yml, not picked
 		`[project]` + "\n" + `web_service = "web"`, // no web_port
 		`[project]` + "\n" + `bring_files = ["../outside"]`,
 	} {
@@ -233,9 +235,85 @@ bring_files = [".env"]
 	}
 }
 
+func TestAnswersAreSavedAsDefaultsForTheNextRun(t *testing.T) {
+	dir := composeProject(t)
+	configDir := t.TempDir()
+	first, err := runWith(t, fakeHost(dir), configDir, `
+name = "shop-1"
+harnesses = ["opencode"]
+[resources]
+cpus = 4
+memory_gib = 12
+root_disk_gib = 40
+docker_disk_gib = 200
+[project]
+workbench = "dev"
+web_service = "web"
+web_port = 3000
+bring_files = [".env.local"]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "orcasm.toml")); err != nil {
+		t.Fatalf("want project answers in orcasm.toml: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(configDir, "config.toml")); err != nil {
+		t.Fatalf("want machine answers in the config dir: %v", err)
+	}
+
+	second, err := runWith(t, fakeHost(dir), configDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := first
+	want.Name = "shop" // the Sandbox name is per Sandbox, not saved
+	assertConfig(t, second, want)
+}
+
+func TestProjectAnswersComeFromACommittedOrcasmToml(t *testing.T) {
+	dir := composeProject(t)
+	writeFile(t, filepath.Join(dir, "orcasm.toml"), "workbench = \"dev\"\nbring_files = []\n")
+	cfg, err := runWith(t, fakeHost(dir), t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Project.Workbench != "dev" || len(cfg.Project.BringFiles) != 0 {
+		t.Fatalf("got %+v, want workbench dev and no files to bring", cfg.Project)
+	}
+}
+
+func TestInteractiveRunAcceptsDefaultsAndTakesTypedAnswers(t *testing.T) {
+	dir := newProject(t, "my-app")
+	var out strings.Builder
+	// Without a terminal the Wizard asks line by line. Answer: folder (keep),
+	// name "typed", then keep every other default.
+	in := strings.NewReader("\ntyped\n" + strings.Repeat("\n", 20))
+	cfg, err := wizard.Run(wizard.Options{Host: fakeHost(dir), ConfigDir: t.TempDir(), In: in, Out: &out})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	assertConfig(t, cfg, wizard.Config{
+		Folder:    dir,
+		Name:      "typed",
+		Resources: wizard.Resources{CPUs: 8, MemoryGiB: 16, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:  6768,
+		Harnesses: []string{"claude", "codex"},
+	})
+}
+
+func TestPipedInteractiveRunFailsOnInvalidAnswersInsteadOfAskingAgain(t *testing.T) {
+	h := fakeHost(newProject(t, "app"))
+	h.SandboxExists = func(string) bool { return true }
+	_, err := wizard.Run(wizard.Options{Host: h, ConfigDir: t.TempDir(), In: strings.NewReader(""), Out: io.Discard})
+	if err == nil {
+		t.Fatal("want an error for a name collision")
+	}
+}
+
 func TestRefusesABusyHostPort(t *testing.T) {
 	h := fakeHost(newProject(t, "app"))
-	h.PortFree = func(p int) bool { return p != 7000 }
+	h.FirstFreePort = func(start int) (int, error) { return start + 1, nil }
 	if _, err := runWith(t, h, t.TempDir(), `host_port = 7000`); err == nil {
 		t.Fatal("want an error for a busy port")
 	}

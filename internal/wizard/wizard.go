@@ -3,6 +3,7 @@ package wizard
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +11,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/Betree/Orcasm/internal/hostport"
 )
 
 // Host is what the Wizard knows about the machine it runs on. NewHost probes
@@ -21,7 +24,9 @@ type Host struct {
 	// Harnesses are the supported harnesses found installed on the host.
 	Harnesses     []string
 	SandboxExists func(name string) bool
-	PortFree      func(port int) bool
+	// FirstFreePort returns the first free host port counting up from start
+	// (hostport.FirstFree on the real host).
+	FirstFreePort func(start int) (int, error)
 }
 
 // Options configures one Wizard run.
@@ -30,30 +35,65 @@ type Options struct {
 	// ConfigDir holds machine-level answers (normally ~/.config/orcasm).
 	ConfigDir string
 	// AnswersFile, when set, makes the run non-interactive: its answers
-	// override defaults and nothing is prompted.
+	// override defaults and nothing is prompted. Otherwise the user is asked
+	// through In/Out, every question pre-filled with its default.
 	AnswersFile string
+	In          io.Reader
+	Out         io.Writer
 }
 
 const (
-	firstHostPort     = 6768
 	hostReservedGiB   = 8
 	defaultRootDisk   = 32
 	defaultDockerDisk = 100
 )
 
-// Run collects a Config.
+// Run collects a Config: defaults computed from the host and the Project,
+// then saved answers (orcasm.toml, ConfigDir), then the answers file or the
+// user's answers. The result is validated and saved as defaults for next time.
 func Run(opts Options) (Config, error) {
 	var answers Config
-	if opts.AnswersFile != "" {
+	interactive := opts.AnswersFile == ""
+	if !interactive {
 		if _, err := toml.DecodeFile(opts.AnswersFile, &answers); err != nil {
 			return Config{}, fmt.Errorf("reading answers file: %w", err)
 		}
 	}
 	h := opts.Host
+	ask := prompter{in: opts.In, out: opts.Out}
+	if interactive {
+		answers.Folder = h.Cwd
+		if err := ask.folder(&answers.Folder); err != nil {
+			return Config{}, err
+		}
+	}
 	folder := resolveFolder(h.Cwd, answers.Folder)
-	cfg := defaults(h, folder, scanProject(folder))
+	saved, err := loadSaved(folder, opts.ConfigDir)
+	if err != nil {
+		return Config{}, err
+	}
+	s := scanProject(folder)
+	cfg := defaults(h, folder, s)
+	overlay(&cfg, saved)
 	overlay(&cfg, answers)
-	if err := validate(cfg, h); err != nil {
+	for {
+		if interactive {
+			if err := ask.sandbox(&cfg, h, s); err != nil {
+				return Config{}, err
+			}
+		}
+		err := validate(cfg, h)
+		if err == nil {
+			break
+		}
+		// Only a person at a terminal can fix the answers; piped input would
+		// be asked again forever.
+		if !interactive || !isTerminal(opts.In) {
+			return Config{}, err
+		}
+		fmt.Fprintf(opts.Out, "\n%v\n\n", err)
+	}
+	if err := save(cfg, opts.ConfigDir); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
@@ -79,7 +119,7 @@ func defaults(h Host, folder string, s scan) Config {
 			RootDiskGiB:   defaultRootDisk,
 			DockerDiskGiB: defaultDockerDisk,
 		},
-		HostPort:  firstFreePort(h.PortFree),
+		HostPort:  portFrom(h, hostport.OrcaWebUI),
 		Harnesses: h.Harnesses,
 		Project: Project{
 			ComposeFiles: s.defaultComposeFiles,
@@ -148,7 +188,7 @@ func validate(cfg Config, h Host) error {
 	switch {
 	case cfg.HostPort < 1024 || cfg.HostPort > 65535:
 		errs = append(errs, fmt.Errorf("host port %d must be between 1024 and 65535", cfg.HostPort))
-	case !h.PortFree(cfg.HostPort):
+	case portFrom(h, cfg.HostPort) != cfg.HostPort:
 		errs = append(errs, fmt.Errorf("host port %d is already in use", cfg.HostPort))
 	}
 	for _, name := range cfg.Harnesses {
@@ -184,11 +224,11 @@ func validateProject(folder string, p Project) []error {
 	return errs
 }
 
-func firstFreePort(free func(int) bool) int {
-	for p := firstHostPort; p < 65536; p++ {
-		if free(p) {
-			return p
-		}
+// portFrom is the first free port from start, or 0 when none is.
+func portFrom(h Host, start int) int {
+	p, err := h.FirstFreePort(start)
+	if err != nil {
+		return 0
 	}
-	return 0
+	return p
 }
