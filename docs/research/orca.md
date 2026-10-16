@@ -650,3 +650,61 @@ There is no fallback from the worktree to the root. Consequences for an uncommit
 - If the script places a sibling worktree under a configured `worktreeBasePath`, it is classified as `external` (`ownership.ts:138-145`), and it still stays hidden by default.
 - Conflict risk: archiving runs the archive hook **before** any removal, as a hard precondition (`execute-worktree-removal.ts:153-170`). Removal then runs `git worktree remove [--force] <path>` (`src/main/git/worktree-removal.ts:77-84`). Do **not** nest sibling worktrees inside the primary worktree directory, or a forced remove deletes them with it. Keep siblings elsewhere and let the archive hook `git -C <other> worktree remove` them.
 - Hooks time out after 2 minutes (`hooks.ts:24`). When the hook runs in-process this is a hard limit; the desktop path instead launches setup as a visible terminal runner (`worktree-remote.ts:1683-1695`).
+
+## #16 spike: agents in the Workbench through a wrapper (2026-10-16)
+
+This spike tested ADR 0002 by hand in a throwaway Sandbox, `spike16-a`. The Sandbox was provisioned with `sandbox.Provision` (Orca 1.4.227, Claude Code 2.1.301, Codex 0.163.0) and removed afterwards. Orca's source was read at tag `v1.4.227`.
+
+Setup:
+
+- One Worktree, `wt1`, was created with `orca-ide worktree create`. It lives at `/home/dev/orca/workspaces/demo/wt1`.
+- The Workbench was a generic `ubuntu:24.04` container. The wrapper was installed as `~/.local/bin/claude` and `~/.local/bin/codex`; `orca.service` puts that directory first on PATH.
+- A tiny fake Anthropic Messages API stood in for the model, through `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` in `~/.claude/settings.json` `env`. Prompts that ask for it get a Bash `tool_use`, so tool calls and permission prompts happen for real.
+- Status was read from `orca-ide worktree ps --json` (`agents[]`) and `orca-ide terminal show --json` (`agentIdentity`, `agentWait`).
+
+The reusable result is `internal/workbench/agent-wrapper.sh`, embedded as `workbench.AgentWrapper`. Its tests run the script against fake `docker`, `socat` and `pgrep`.
+
+### What works (verified in the Sandbox)
+
+| Check | Result |
+|---|---|
+| Agent runs in the Workbench | Yes. The Bash tool's `hostname` printed the container id, and files land in the Worktree. On Main the wrapper `exec`s the real agent, and status works as before. |
+| working / waiting / done | Yes. Orca showed `done` at start, `working` with `toolName: Bash`, then `done` with `lastAssistantMessage`. Without bypass, the permission prompt showed as `state: waiting` and worktree `status: permission`, with `agentWait.source: hook`. Approving returned it to `done`. After `/exit` the agent row disappears. |
+| Process recognition | Yes. The wrapper is a bash script named `claude` and **does not exec** `docker`, so the PTY's foreground process is `claude`. With hooks disabled (`env -u ORCA_PANE_KEY`), Orca still reported `agentIdentity: claude`. An `exec docker exec` variant made the foreground process `docker`. It was still recognized there, apparently from the OSC title "✳ Claude Code", which passes through `docker exec -t`, but that is weaker evidence. Keep the non-exec form. |
+| Orca's agent launch | `terminal create --command claude` (and the UI agent picker) types `claude '--dangerously-skip-permissions'`. Codex gets `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`, after a `codex --help` probe. Each passes through the wrapper unchanged. |
+| Folder trust | Yes, with no dialog in the Workbench. Orca's preflight writes `projects[<worktree>].hasTrustDialogAccepted` to `~/.claude.json`. For Codex it writes `trust_level = "trusted"` to `~/.config/orca/codex-runtime-home/home/config.toml`. Both are found because the Workbench sees the same `$HOME` at the same path. |
+| Codex | It launches in the Workbench as its vendored static musl binary, so the Workbench needs no Node. Orca recognized it (`agentIdentity: codex`, `agentWait` from prompt text on the sign-in screen). **Codex hooks were not exercised** because there was no Codex login. `~/.codex/hooks.json` calls `${ORCA_AGENT_HOOK_ROOT}/agent-hooks/codex-hook.sh`, or `$HOME/.orca/agent-hooks/codex-hook.sh` when that variable is unset (it was unset for terminal launches), so Codex uses the same rewritten copy. Orca set no `CODEX_HOME` for these launches; the env is forwarded if it does. |
+| Chat-view (structured) sessions | Simulated, not driven from the UI. Orca resolves `claude` on the server PATH (the wrapper) and spawns it with pipes. Piping stream-json through the wrapper from the Worktree worked: `init` had the Worktree `cwd` and the `result` was `success`. Without a tty the wrapper uses `docker exec -i` only. |
+| Teardown | Closing the Orca terminal, or SIGTERM/SIGKILL to the wrapper's process group, left no agent running in the Workbench. |
+| Compose networks | `host.docker.internal` (`host-gateway`, which is 172.17.0.1) reaches the relay from a user-defined network too, so a Compose-service Workbench works. |
+
+### Exact plumbing the wrapper needs
+
+1. **Routing.** If `$PWD` is under Orca's workspace dir (default `~/orca/workspaces`), run the agent in the running container labelled `orcasm.worktree=<Worktree path>`, choosing the longest label that is a prefix of `$PWD`. Otherwise `exec` the real agent. List containers with `docker ps --filter label=orcasm.worktree --format '{{.ID}} {{.Label "orcasm.worktree"}}'`. `.Labels` is a string, so `index` fails.
+2. **`docker exec -i [-t] -u $(id -u):$(id -g) -w "$PWD" -e HOME="$HOME" -e ORCASM_HOOK_HOST=host.docker.internal -e <names> <container> <agent binary> "$@"`.**
+   - Pass `-t` only when stdin and stdout are ttys.
+   - Forward these variables by name, so their values never reach argv: `ORCA_*`, `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, `TERM*`, `COLORTERM`, `LANG`, `LC_*`.
+   - Orca's terminal env holds `ORCA_PANE_KEY`, `ORCA_TAB_ID`, `ORCA_WORKTREE_ID`, `ORCA_AGENT_HOOK_{PORT,TOKEN,ENV,VERSION,TRANSPORT,ENDPOINT}` and `ORCA_USER_DATA_PATH`. An agent launch adds `ORCA_AGENT_LAUNCH` and `ORCA_AGENT_LAUNCH_TOKEN`.
+3. **Mounts (Workbench creation, #19):**
+   - **The whole `$HOME` of `dev` at the same path.** This covers Main, the Worktrees under `~/orca/workspaces`, Main's `.git` (a worktree's `.git` file points into it), `~/.claude`, `~/.claude.json`, `~/.codex`, and Orca's `~/.config/orca`: `agent-hooks/endpoint.env`, the spool and `codex-runtime-home`.
+     Do **not** bind-mount `~/.claude.json` as a single file. Orca's trust preflight replaces it by rename, so the container keeps the old inode, which caused a trust dialog in the spike. ADR 0001 makes the Sandbox, not the Workbench, the security boundary, so sharing `$HOME` is acceptable.
+   - `~/.cache/orcasm/agent-hooks` mounted read-only **over** `~/.orca/agent-hooks`. This is the rewritten copy of Orca's hook scripts (see step 4).
+   - `/usr/local/lib/node_modules` read-only at the same path. It holds the agent binaries: Claude Code's `bin/claude.exe` is native (glibc), and Codex uses `node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/bin/codex`.
+   - `--add-host host.docker.internal:host-gateway`, and run as uid 1001 (`-u` per exec is enough).
+4. **Hook scripts.** Orca's settings call `${HOME}/.orca/agent-hooks/claude-hook.sh` (and `codex-hook.sh`). These POST to `http://127.0.0.1:${ORCA_AGENT_HOOK_PORT}`, and Orca's hook server listens on loopback only (`server-lifecycle.ts`: `listen(0, '127.0.0.1')`). On every launch, the wrapper rewrites a copy:
+   - `127.0.0.1:` becomes `${ORCASM_HOOK_HOST:-127.0.0.1}:`, and `--noproxy "127.0.0.1"` becomes `--noproxy "*"`.
+   - **`ORCA_HOOK_AGENT_PID=` is inserted after the shebang.** Otherwise the hook reports the agent's PID from the container's PID namespace (`hook-process-capture.ts`). Orca's liveness probe then checks that PID in the Sandbox, marks the agent `ended`, and drops it. In the spike, SessionStart arrived and `agents[]` stayed empty until this change. Without a PID, Orca treats presence as unverifiable, which is the same as over SSH.
+5. **Relay.** Run `socat TCP-LISTEN:<port>,bind=172.17.0.1,reuseaddr,fork TCP:127.0.0.1:<port>` in the Sandbox. Take the port from `$ORCA_AGENT_HOOK_ENDPOINT` (`~/.config/orca/agent-hooks/endpoint.env`), not from the shell's env. The hook token still authenticates each POST (an unauthenticated POST got a 403).
+6. **The Workbench needs `/bin/sh`, `curl`, `base64`, `tr`, `awk` and `sed`** for Orca's hook script. If `curl` is missing, events go to the spool file (`~/.config/orca/agent-hooks/spool/`) instead of live status.
+
+### Gaps and decisions for #19
+
+- **Relay lifetime.** The wrapper starts `socat` lazily, per port. After an Orca restart, the port changes. A running agent's hooks re-read `endpoint.env` and post to the new port, but nothing listens there until the next wrapper launch. #19 should run the relay as a systemd unit that follows `endpoint.env`, or as part of `orca.service`. Provisioning must also install `socat`, which is not in `provision.sh` yet.
+- **`docker0` address.** 172.17.0.1 is Docker's default. The wrapper and the relay take `ORCASM_BRIDGE_IP`, and #19 could read it from `docker network inspect bridge`.
+- **Workbench image prerequisites.** A user's Compose service must have glibc for Claude Code and the tools listed in step 6. A generic fallback image should install them. Codex's musl build runs anywhere.
+- **Multi-repo Worktrees (ADR 0005).** The lookup is a path prefix, so one label at the Worktree's root dir covers all its repos' git worktrees. The wrapper assumes `orca/workspaces` as Orca's `workspaceDir` (override: `ORCASM_WORKTREES`).
+- **Not verified:**
+  - Codex hook events end to end (they need a login).
+  - The real chat-view UI (only its spawn shape was simulated).
+  - Agents surviving an Orca restart (relay lifetime, above).
+  - Orca's own `~/.claude/settings.json` statusline script (`claude-statusline.sh`). It is rewritten like the others, but its output was not checked.
