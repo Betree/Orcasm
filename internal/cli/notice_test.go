@@ -19,6 +19,7 @@ func TestTheUpgradeNoticeShowsOnlyToAPersonAtAHostCommand(t *testing.T) {
 		{args: []string{"ls"}, tty: true, env: map[string]string{"ORCASM_NO_UPGRADE_NOTICE": "1"}, want: false},
 		// It does it already.
 		{args: []string{"upgrade"}, tty: true, want: false},
+		{args: []string{"self-update"}, tty: true, want: false},
 		// Runs in the Sandbox, for Orca's hooks and agents.
 		{args: []string{"worktree", "workbench"}, tty: true, want: false},
 	} {
