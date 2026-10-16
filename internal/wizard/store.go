@@ -19,10 +19,13 @@ const ProjectFile = "orcasm.toml"
 const machineFile = "config.toml"
 
 // machineAnswers are the answers that belong to this host rather than to the
-// Project: how big Sandboxes are and which harnesses to install.
+// Project: how big Sandboxes are, which harnesses to install and which host
+// tokens may be shared (by name only: token values are never saved).
 type machineAnswers struct {
-	Resources Resources `toml:"resources"`
-	Harnesses []string  `toml:"harnesses"`
+	Resources Resources   `toml:"resources"`
+	Harnesses []string    `toml:"harnesses"`
+	Secrets   []string    `toml:"secrets"`
+	Git       GitIdentity `toml:"git,omitempty"`
 }
 
 // savedProject is the Project as written to orcasm.toml. Lists are always
@@ -43,7 +46,10 @@ func loadSaved(folder, configDir string) (Config, error) {
 	if err := decodeIfExists(filepath.Join(configDir, machineFile), &m); err != nil {
 		return Config{}, err
 	}
-	saved.Resources, saved.Harnesses = m.Resources, m.Harnesses
+	saved.Resources, saved.Harnesses, saved.Git = m.Resources, m.Harnesses, m.Git
+	for _, name := range m.Secrets {
+		saved.Secrets = append(saved.Secrets, Secret{Name: name})
+	}
 	var p savedProject
 	if err := decodeIfExists(filepath.Join(folder, ProjectFile), &p); err != nil {
 		return Config{}, err
@@ -72,7 +78,11 @@ func save(cfg Config, configDir string) error {
 	if harnesses == nil {
 		harnesses = []string{}
 	}
-	if err := encode(filepath.Join(configDir, machineFile), machineAnswers{cfg.Resources, harnesses}); err != nil {
+	secrets := []string{}
+	for _, s := range cfg.Secrets {
+		secrets = append(secrets, s.Name)
+	}
+	if err := encode(filepath.Join(configDir, machineFile), machineAnswers{cfg.Resources, harnesses, secrets, cfg.Git}); err != nil {
 		return err
 	}
 	p := savedProject(cfg.Project)
