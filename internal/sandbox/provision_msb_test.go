@@ -62,12 +62,13 @@ for c in git rsync curl gh claude codex opencode; do command -v $c >/dev/null ||
 docker run --rm hello-world >/dev/null && echo docker-ok
 env -i PATH=/usr/bin:/bin curl -fsS -o /dev/null https://github.com && echo tls-ok
 systemctl is-active orca; ps -o user= -C orca-ide | sort -u
-git config user.name; echo "$ORCASM_TEST_TOKEN"`
+git config user.name; echo "$ORCASM_TEST_TOKEN"
+curl -sS -o /dev/null -w 'proxy %{http_code}\n' http://no-such-worktree.localhost/`
 	out, err := sb.Exec(ctx, sandbox.User, "bash", "-lc", checks)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\ntls-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\n"
+	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\ntls-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\nproxy 404\n"
 	if out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}
@@ -80,12 +81,12 @@ services:
     image: nginx:alpine
     ports: ["8080:80"]
 EOF
-echo "before: $(docker ps -q | wc -l)"
+echo "before: $(docker ps -q --filter label=com.docker.compose.project | wc -l)"
 stack up --wait >/dev/null 2>&1
 curl -fsS -o /dev/null http://127.0.0.1:8080/ && echo web-ok
 docker compose ls -q
 stack down >/dev/null 2>&1
-echo "after: $(docker ps -aq | wc -l)"`
+echo "after: $(docker ps -aq --filter label=com.docker.compose.project | wc -l)"`
 	out, err = sb.Exec(ctx, sandbox.User, "bash", "-lc", stack)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)

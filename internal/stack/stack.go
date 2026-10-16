@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -151,6 +152,9 @@ func Generate(ctx context.Context, docker Docker, spec Spec, dir string) (Stack,
 	} else if !slices.Contains(services, st.Workbench) {
 		return Stack{}, fmt.Errorf("workbench service %q is not in the Compose files %v", st.Workbench, spec.ComposeFiles)
 	}
+	if st.WebService != "" && !slices.Contains(services, st.WebService) {
+		return Stack{}, fmt.Errorf("web service %q is not in the Compose files %v", st.WebService, spec.ComposeFiles)
+	}
 
 	for _, h := range spec.Harnesses {
 		for _, d := range harnessDirs[h] {
@@ -174,7 +178,17 @@ func Generate(ctx context.Context, docker Docker, spec Spec, dir string) (Stack,
 	return st, nil
 }
 
-var unsafeName = regexp.MustCompile(`[^a-z0-9_-]+`)
+var (
+	unsafeName = regexp.MustCompile(`[^a-z0-9_-]+`)
+	unsafeHost = regexp.MustCompile(`[^a-z0-9-]+`)
+)
+
+// Hostname is where the Sandbox's proxy serves a Worktree's web service:
+// http://<Hostname>/ from inside the Sandbox, e.g. in Orca's browser
+// (*.localhost resolves to the loopback).
+func Hostname(worktree string) string {
+	return strings.Trim(unsafeHost.ReplaceAllString(strings.ToLower(worktree), "-"), "-") + ".localhost"
+}
 
 // ProjectName is the Compose project name of a Worktree's Stack: sibling
 // checkouts of one Worktree share it.
@@ -231,6 +245,9 @@ func override(spec Spec, workbench string, services []string) *yaml.Node {
 		if name == workbench {
 			svc.Content = append(svc.Content, workbenchSetup(spec)...)
 		}
+		if name == spec.WebService {
+			svc.Content = append(svc.Content, scalar("labels"), proxyLabels(spec))
+		}
 		svcs.Content = append(svcs.Content, scalar(name), svc)
 	}
 	if workbench == GenericWorkbench {
@@ -274,6 +291,22 @@ func workbenchSetup(spec Spec) []*yaml.Node {
 		env.Content = append(env.Content, scalar(name), scalar("$$MSB_"+name))
 	}
 	return []*yaml.Node{scalar("volumes"), sequence(vols...), scalar("environment"), env}
+}
+
+// ProxyLabel marks the containers the Sandbox's proxy routes to: it watches
+// only containers labelled ProxyLabel=true (see internal/sandbox/proxy.go).
+const ProxyLabel = "orcasm.proxy"
+
+// proxyLabels route Hostname(Worktree) to the web service's port through
+// the proxy's Docker provider (Traefik labels).
+func proxyLabels(spec Spec) *yaml.Node {
+	name := ProjectName(spec.Worktree) // unique per Stack
+	return mapping(
+		scalar(ProxyLabel), scalar("true"),
+		scalar("traefik.enable"), scalar("true"),
+		scalar("traefik.http.routers."+name+".rule"), scalar("Host(`"+Hostname(spec.Worktree)+"`)"),
+		scalar("traefik.http.services."+name+".loadbalancer.server.port"), scalar(strconv.Itoa(spec.WebPort)),
+	)
 }
 
 func mapping(kv ...*yaml.Node) *yaml.Node {

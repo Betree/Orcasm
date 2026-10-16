@@ -2,6 +2,7 @@ package stack_test
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -278,6 +279,69 @@ func TestUpAndDownDriveComposeOnTheWholeStack(t *testing.T) {
 	want := []string{prefix + "up --detach --build --remove-orphans", prefix + "down --volumes --remove-orphans"}
 	if !slices.Equal(got, want) {
 		t.Errorf("calls = %q, want %q", got, want)
+	}
+}
+
+func labels(t *testing.T, o override, service string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	if n, ok := o.Services[service]["labels"]; ok {
+		if err := n.Decode(&out); err != nil {
+			t.Fatalf("%s.labels: %v", service, err)
+		}
+	}
+	return out
+}
+
+func TestTheProxyRoutesTheWorktreeHostnameToTheWebServicePort(t *testing.T) {
+	s := spec(t)
+	s.Worktree = "Fix/Login_2"
+	s.WebService, s.WebPort = "web", 3000
+	_, o, _ := generate(t, s, "app", "web", "db")
+	got := labels(t, o, "web")
+	want := map[string]string{
+		"orcasm.proxy":   "true",
+		"traefik.enable": "true",
+		"traefik.http.routers.orcasm-fix-login_2.rule":                      "Host(`fix-login-2.localhost`)",
+		"traefik.http.services.orcasm-fix-login_2.loadbalancer.server.port": "3000",
+	}
+	if !maps.Equal(got, want) {
+		t.Errorf("web labels = %v, want %v", got, want)
+	}
+	for _, other := range []string{"app", "db"} {
+		if l := labels(t, o, other); len(l) != 0 {
+			t.Errorf("%s got proxy labels %v", other, l)
+		}
+	}
+}
+
+func TestHostnameIsTheWorktreeUnderLocalhost(t *testing.T) {
+	for name, want := range map[string]string{
+		"feat-login":       "feat-login.localhost",
+		"Fix/Login.v2 now": "fix-login-v2-now.localhost",
+		"a_b":              "a-b.localhost",
+	} {
+		if got := stack.Hostname(name); got != want {
+			t.Errorf("Hostname(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestWithoutAWebServiceNothingIsRouted(t *testing.T) {
+	_, o, _ := generate(t, spec(t), "app", "db")
+	for name := range o.Services {
+		if l := labels(t, o, name); len(l) != 0 {
+			t.Errorf("%s got proxy labels %v", name, l)
+		}
+	}
+}
+
+func TestAWebServiceMissingFromTheComposeFilesIsRefused(t *testing.T) {
+	s := spec(t)
+	s.WebService, s.WebPort = "web", 3000
+	_, err := stack.Generate(context.Background(), (&fakeDocker{services: []string{"app"}}).run, s, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "web") {
+		t.Fatalf("err = %v, want one naming the missing web service", err)
 	}
 }
 
