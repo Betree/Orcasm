@@ -44,11 +44,17 @@ func TestRemoveConfigForgetsTheSandbox(t *testing.T) {
 	if err := sandbox.SaveConfig(dir, demoConfig()); err != nil {
 		t.Fatal(err)
 	}
+	if err := sandbox.SaveInstalled(dir, "demo", sandbox.Installed{Orca: "1.4.227"}); err != nil {
+		t.Fatal(err)
+	}
 	if err := sandbox.RemoveConfig(dir, "demo"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := sandbox.LoadConfig(dir, "demo"); err == nil {
 		t.Error("still loadable after RemoveConfig")
+	}
+	if got, _ := sandbox.LoadInstalled(dir, "demo"); got.Orca != "" {
+		t.Errorf("installed versions still recorded: %+v", got)
 	}
 	if err := sandbox.RemoveConfig(dir, "demo"); err != nil {
 		t.Errorf("removing twice: %v", err)
@@ -89,5 +95,12 @@ func TestSecretsOfASandboxWithoutKeptConfigIsEmpty(t *testing.T) {
 	env, err := sandbox.Secrets(t.TempDir(), "old", hostValues)
 	if err != nil || len(env) != 0 {
 		t.Fatalf("secrets %+v, err %v; want none", env, err)
+	}
+}
+
+func TestASandboxWithNoRecordHasNothingRecordedAsInstalled(t *testing.T) {
+	got, err := sandbox.LoadInstalled(t.TempDir(), "demo")
+	if err != nil || got != (sandbox.Installed{}) {
+		t.Errorf("LoadInstalled = %+v, %v; want nothing", got, err)
 	}
 }

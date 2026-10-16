@@ -47,17 +47,21 @@ type Creator struct {
 	SetHooks func(ctx context.Context, name, guestPath string) error
 	// ConfigDir keeps each Sandbox's Config (SaveConfig).
 	ConfigDir string
+	// OrcaVersion is the Orca release Provision installs, recorded with
+	// SaveInstalled.
+	OrcaVersion string
 	// OrcaWait bounds how long registration waits for Orca's runtime, trying
 	// every Poll.
 	OrcaWait, Poll time.Duration
 }
 
 // NewCreator returns the Creator driving msb through m. guestBinary is the
-// orcasm installed in the Sandbox (GuestBinary).
-func NewCreator(m msb.CLI, ssh SSHAccess, secretValue SecretValue, configDir, guestBinary string) Creator {
+// orcasm installed in the Sandbox (GuestBinary), orcaVersion the Orca
+// release (DesiredOrca).
+func NewCreator(m msb.CLI, ssh SSHAccess, secretValue SecretValue, configDir, guestBinary, orcaVersion string) Creator {
 	return Creator{
 		Provision: func(ctx context.Context, cfg wizard.Config, out io.Writer) error {
-			return Provision(ctx, m, cfg, secretValue, out)
+			return Provision(ctx, m, cfg, orcaVersion, secretValue, out)
 		},
 		InstallOrcasm: func(ctx context.Context, cfg wizard.Config, out io.Writer) error {
 			return InstallOrcasm(ctx, m, cfg, guestBinary, out)
@@ -74,9 +78,10 @@ func NewCreator(m msb.CLI, ssh SSHAccess, secretValue SecretValue, configDir, gu
 			_, err := m.Exec(ctx, name, guest.User, guest.Binary, "worktree", "install-hooks", guestPath)
 			return err
 		},
-		ConfigDir: configDir,
-		OrcaWait:  2 * time.Minute,
-		Poll:      2 * time.Second,
+		ConfigDir:   configDir,
+		OrcaVersion: orcaVersion,
+		OrcaWait:    2 * time.Minute,
+		Poll:        2 * time.Second,
 	}
 }
 
@@ -85,6 +90,9 @@ func NewCreator(m msb.CLI, ssh SSHAccess, secretValue SecretValue, configDir, gu
 // Progress goes to out.
 func (c Creator) Create(ctx context.Context, cfg wizard.Config, out io.Writer) error {
 	if err := c.Provision(ctx, cfg, out); err != nil {
+		return err
+	}
+	if err := SaveInstalled(c.ConfigDir, cfg.Name, Installed{Orca: c.OrcaVersion}); err != nil {
 		return err
 	}
 	if err := c.InstallOrcasm(ctx, cfg, out); err != nil {

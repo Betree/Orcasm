@@ -18,7 +18,7 @@ import (
 // Orca.
 func TestProvisionPutsAWrapperPerChosenHarnessBeforeOrcaStarts(t *testing.T) {
 	f := &fakeCreateMSB{}
-	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard); err != nil {
+	if err := sandbox.Provision(context.Background(), f, demoConfig(), sandbox.OrcaVersion, hostValues, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	wrappers, orca := -1, -1

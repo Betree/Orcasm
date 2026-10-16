@@ -71,7 +71,7 @@ func TestWorktreeHooksInARealSandbox(t *testing.T) {
 		t.Fatalf("sandbox %s exists; set ORCASM_TEST_KEEP=1 to reuse it", name)
 	}
 	if !reuse {
-		if err := sandbox.Provision(ctx, m, cfg, nil, testWriter{t}); err != nil {
+		if err := sandbox.Provision(ctx, m, cfg, sandbox.OrcaVersion, nil, testWriter{t}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -15,3 +15,13 @@ func SetCreate(f func(context.Context, wizard.Config, sandbox.SecretValue, io.Wr
 	create = f
 	return func() { create = old }
 }
+
+// WantsUpgradeNotice reports whether `orcasm <args>` would print the daily
+// upgrade notice, with stdout a terminal or not and the environment env.
+func WantsUpgradeNotice(args []string, tty bool, env map[string]string) bool {
+	cmd, _, err := NewRootCommand(BuildInfo{Version: "dev"}).Find(args)
+	if err != nil {
+		panic(err)
+	}
+	return noticeWanted(cmd, tty, func(k string) string { return env[k] })
+}

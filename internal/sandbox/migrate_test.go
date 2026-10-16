@@ -168,10 +168,15 @@ func TestUpgradeStartsAStoppedSandboxSoMigrationsRunWithItsServices(t *testing.T
 		return nil
 	}}})()
 	secrets := []msb.Secret{{Name: "TOKEN", Value: "s3cret"}}
-	m := sandbox.Manager{MSB: f, Labels: f, StartSecrets: func(context.Context, string) ([]msb.Secret, error) { return secrets, nil }}
+	dir := t.TempDir()
+	if err := sandbox.SaveConfig(dir, demoConfig()); err != nil {
+		t.Fatal(err)
+	}
+	m := sandbox.Manager{MSB: f, Labels: f, Installer: f, ConfigDir: dir,
+		StartSecrets: func(context.Context, string) ([]msb.Secret, error) { return secrets, nil }}
 
 	var out strings.Builder
-	if err := m.Upgrade(context.Background(), "demo", &out); err != nil {
+	if _, err := m.Upgrade(context.Background(), "demo", sandbox.UpgradeOptions{Orca: "1.4.227"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(seen, []msb.Status{msb.Running}) {

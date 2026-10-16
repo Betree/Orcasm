@@ -142,7 +142,7 @@ func TestProvisionInstallsTheStackCommandForMain(t *testing.T) {
 	f := &fakeCreateMSB{}
 	cfg := demoConfig()
 	cfg.Project.ComposeFiles = []string{"docker-compose.yml", "ops/docker-compose.dev.yml"}
-	if err := sandbox.Provision(context.Background(), f, cfg, hostValues, io.Discard); err != nil {
+	if err := sandbox.Provision(context.Background(), f, cfg, sandbox.OrcaVersion, hostValues, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
