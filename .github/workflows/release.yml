@@ -9,6 +9,9 @@ permissions:
 
 jobs:
   goreleaser:
+    # Off until the base features are in: set the repository variable
+    # ENABLE_RELEASES=true (Settings → Secrets and variables → Actions → Variables).
+    if: vars.ENABLE_RELEASES == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
