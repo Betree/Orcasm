@@ -63,7 +63,8 @@ type SecretValue func(wizard.Secret) (string, error)
 
 // Provision creates the Sandbox described by cfg and installs everything in
 // it, streaming progress to out. It returns once Orca's web UI answers on
-// the guest port; the host reaches it on 127.0.0.1:cfg.HostPort.
+// the guest port; the host reaches it on 127.0.0.1:cfg.HostPort. It also
+// starts the proxy serving each Worktree at http://<worktree>.localhost.
 //
 // cfg.Secrets become msb secrets, valued through secretValue; every later
 // `msb start` of the Sandbox needs those values again.
@@ -79,6 +80,10 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	}
 	main := MainPath(cfg.ProjectPath)
 	secrets, err := valued(cfg.Secrets, secretValue)
+	if err != nil {
+		return err
+	}
+	stackArgv, err := stackInstallArgv(main, cfg.Project.ComposeFiles)
 	if err != nil {
 		return err
 	}
@@ -111,6 +116,14 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	if err := m.ExecStreaming(ctx, cfg.Name, "", out, argv...); err != nil {
 		return fmt.Errorf("provision Sandbox %s (kept for inspection; `msb rm --force %s` to discard): %w",
 			cfg.Name, cfg.Name, err)
+	}
+	fmt.Fprintln(out, "==> Installing the stack command for Main's Stack")
+	if err := m.ExecStreaming(ctx, cfg.Name, "", out, stackArgv...); err != nil {
+		return fmt.Errorf("install stack in Sandbox %s: %w", cfg.Name, err)
+	}
+	fmt.Fprintln(out, "==> Starting the proxy serving http://<worktree>.localhost")
+	if err := m.ExecStreaming(ctx, cfg.Name, "", out, proxyArgv()...); err != nil {
+		return fmt.Errorf("start the Worktree proxy in Sandbox %s: %w", cfg.Name, err)
 	}
 	return nil
 }

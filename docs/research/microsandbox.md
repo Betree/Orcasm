@@ -282,7 +282,8 @@ Tested on throwaway `spike15-*` sandboxes, removed afterwards.
 - **Default root disk size** for new local OCI sandboxes in 0.7.8. 4 GiB was the legacy default.
 - **Contradiction on flat roots:** `docs/sandboxes/optimization.mdx` says flat roots don't support patches or snapshots, while `docs/cli/sandbox-commands.mdx` says they do.
 - **Exact label matching:** whether a bare `--label orcasm` selector does exact empty-value matching or key-exists matching. Use `orcasm=1` to sidestep the question.
-- **Docker inside the VM:** cgroup v1 or v2, cgroup delegation, and whether nested containers trust the msb TLS-interception CA. Interception only applies when enabled, e.g. by a secret; containers ship their own CA bundles.
+- **Docker inside the VM:** cgroup v1 or v2 and cgroup delegation.
+- **Tested (#17), containers and the msb CA:** with a secret set, container traffic is intercepted too. A stock `curlimages/curl` container fails on `https://example.com` (self-signed certificate in chain); with the Sandbox's `/etc/ssl/certs/ca-certificates.crt` bind-mounted and passed as the CA file it gets 200. Secret env vars in a container read as `$MSB_<NAME>` when Compose sets `NAME: $$MSB_<NAME>`. Ubuntu 24.04's `docker-compose-v2` is 2.40, so `!reset` works.
 - **Interception scope:** whether enabling TLS interception (implied by any secret) breaks certificate pinning or HTTP/2 for other hosts. `--tls-bypass` exists to exclude domains.
 - **OAuth:** any first-party support for OAuth or refreshing credentials. None was found in docs or source; the conclusion in §6 is inference.
 - **Nested KVM inside a sandbox:** not documented.

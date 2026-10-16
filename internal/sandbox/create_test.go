@@ -34,6 +34,10 @@ func (w *world) creator(t *testing.T) sandbox.Creator {
 			w.steps = append(w.steps, "provision "+cfg.Name)
 			return nil
 		},
+		InstallOrcasm: func(_ context.Context, cfg wizard.Config, _ io.Writer) error {
+			w.steps = append(w.steps, "install orcasm in "+cfg.Name)
+			return nil
+		},
 		Copy: func(_ context.Context, name string, opts repository.CopyOptions) error {
 			w.steps = append(w.steps, "copy into "+name)
 			w.copied = append(w.copied, opts)
@@ -50,6 +54,10 @@ func (w *world) creator(t *testing.T) sandbox.Creator {
 				return errors.New("orca runtime not ready")
 			}
 			w.steps = append(w.steps, "register "+guestPath+" in Orca of "+name)
+			return nil
+		},
+		SetHooks: func(_ context.Context, name, guestPath string) error {
+			w.steps = append(w.steps, "set Orca hooks of "+guestPath+" in "+name)
 			return nil
 		},
 		ConfigDir: w.configDir,
@@ -87,10 +95,12 @@ func TestCreateSetsUpTheWholeSandboxInOrder(t *testing.T) {
 
 	want := []string{
 		"provision demo",
+		"install orcasm in demo",
 		"copy into demo",
 		"ssh add demo",
 		"remote /home/u/code/demo demo:/home/dev/demo via ssh -F orcasm",
 		"register /home/dev/demo in Orca of demo",
+		"set Orca hooks of /home/dev/demo in demo",
 	}
 	if !reflect.DeepEqual(w.steps, want) {
 		t.Errorf("steps\n%s\nwant\n%s", strings.Join(w.steps, "\n"), strings.Join(want, "\n"))
@@ -138,7 +148,7 @@ func TestCreateWarnsWhenTheRemoteNeedsTheUsersHelp(t *testing.T) {
 	if !strings.Contains(out.String(), "core.sshCommand") {
 		t.Errorf("want a warning, got:\n%s", out.String())
 	}
-	if last := w.steps[len(w.steps)-1]; !strings.HasPrefix(last, "register") {
+	if last := w.steps[len(w.steps)-1]; !strings.HasPrefix(last, "set Orca hooks") {
 		t.Errorf("steps %q", w.steps)
 	}
 }
