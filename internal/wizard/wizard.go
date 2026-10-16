@@ -1,6 +1,7 @@
 package wizard
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +28,12 @@ type Host struct {
 	// FirstFreePort returns the first free host port counting up from start
 	// (hostport.FirstFree on the real host).
 	FirstFreePort func(start int) (int, error)
+	// Getenv reads the host environment (os.Getenv on the real host).
+	Getenv func(key string) string
+	// Output runs a host command and returns its stdout.
+	Output func(name string, args ...string) (string, error)
+	// OpenCodeAuthFile is OpenCode's auth.json ("" when there is none).
+	OpenCodeAuthFile string
 }
 
 // Options configures one Wizard run.
@@ -72,17 +79,33 @@ func Run(opts Options) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	// A remembered approval only stands while the host still has the token.
+	saved.Secrets = slices.DeleteFunc(saved.Secrets, func(s Secret) bool {
+		_, ok := availableSecret(h, s.Name)
+		return !ok
+	})
 	s := scanProject(folder)
 	cfg := defaults(h, folder, s)
 	overlay(&cfg, saved)
 	overlay(&cfg, answers)
+	var offered []Secret
+	var offeredGit GitIdentity
+	if interactive {
+		offered = availableSecrets(h)
+		offeredGit = cmp.Or(hostGitIdentity(h, folder), cfg.Git)
+	}
 	for {
 		if interactive {
 			if err := ask.sandbox(&cfg, h, s); err != nil {
 				return Config{}, err
 			}
+			if err := ask.share(&cfg, offered, offeredGit); err != nil {
+				return Config{}, err
+			}
 		}
-		err := validate(cfg, h)
+		var err error
+		cfg.Secrets, err = resolveSecrets(h, cfg.Secrets)
+		err = errors.Join(err, validate(cfg, h))
 		if err == nil {
 			break
 		}
@@ -147,6 +170,10 @@ func overlay(cfg *Config, a Config) {
 	set(&cfg.Project.WebPort, a.Project.WebPort)
 	if a.Project.BringFiles != nil {
 		cfg.Project.BringFiles = a.Project.BringFiles
+	}
+	set(&cfg.Git, a.Git)
+	if a.Secrets != nil {
+		cfg.Secrets = a.Secrets
 	}
 }
 

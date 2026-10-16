@@ -17,6 +17,18 @@ type Config struct {
 	// (subset of SupportedHarnesses).
 	Harnesses []string `toml:"harnesses,omitempty"`
 	Project   Project  `toml:"project,omitempty"`
+	// Secrets are the host tokens the user approved sharing with the Sandbox,
+	// as specs: the values stay on the host.
+	Secrets []Secret `toml:"secrets,omitempty"`
+	// Git is the identity commits are made with in the Sandbox; empty means
+	// none was shared.
+	Git GitIdentity `toml:"git,omitempty"`
+}
+
+// GitIdentity is a git user.name and user.email.
+type GitIdentity struct {
+	Name  string `toml:"name,omitempty"`
+	Email string `toml:"email,omitempty"`
 }
 
 // Resources sizes the Sandbox VM.
