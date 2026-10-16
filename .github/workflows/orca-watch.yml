@@ -1,0 +1,181 @@
+# The Orca release watcher (ADR 0006): when Orca publishes a release the
+# compatibility file does not list, run the end-to-end suite against it and,
+# on a pass, record it in compatibility.json on main. orcasm reads that file
+# from main, so Sandboxes adopt the new Orca with no orcasm release.
+#
+# The suite runs the latest orcasm release (main while there is none), and
+# the entry records that release as the oldest orcasm the Orca passed with.
+# A failure opens an issue; while it is open, that Orca is not retried with
+# that orcasm. Close it (or publish an orcasm release) to try again.
+name: orca-watch
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      orca_version:
+        description: Orca release to test (empty for Orca's latest); always tested, even with an open failure issue
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+# One watcher at a time: two would test, and commit, the same release.
+concurrency:
+  group: orca-watch
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      new: ${{ steps.detect.outputs.new }}
+      orca: ${{ steps.detect.outputs.orca }}
+      from: ${{ steps.detect.outputs.from }}
+      orcasm: ${{ steps.detect.outputs.orcasm }}
+      ref: ${{ steps.detect.outputs.ref }}
+      title: ${{ steps.detect.outputs.title }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - id: detect
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          REQUESTED: ${{ inputs.orca_version }}
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/compatfile" ./internal/compat/compatfile
+          # GitHub's latest release skips Orca's pre-releases (mobile-android-v*).
+          orca=${REQUESTED:-$(gh api repos/stablyai/orca/releases/latest --jq .tag_name)}
+          orca=${orca#v}
+          if "$RUNNER_TEMP/compatfile" tested compatibility.json "$orca"; then
+            echo "Orca $orca is already in the compatibility file."
+            echo "new=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The orcasm users run: the latest release, or main before the first.
+          if tag=$(gh release view --repo "$REPO" --json tagName --jq .tagName 2>/dev/null); then
+            ref=$tag orcasm=${tag#v}
+          else
+            ref=main orcasm=0.0.0
+          fi
+          title="Orca v$orca fails the end-to-end suite with orcasm $ref"
+          if [ -z "$REQUESTED" ] &&
+            gh issue list --repo "$REPO" --state open --search "\"$title\" in:title" --json title --jq '.[].title' | grep -qxF "$title"; then
+            echo "Orca $orca already failed with orcasm $ref; skipping while \"$title\" is open."
+            echo "new=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          from=$("$RUNNER_TEMP/compatfile" newest compatibility.json)
+          echo "Testing Orca $orca (upgrading from $from) with orcasm $ref."
+          {
+            echo "new=true"
+            echo "orca=$orca"
+            echo "from=$from"
+            echo "orcasm=$orcasm"
+            echo "ref=$ref"
+            echo "title=$title"
+          } >>"$GITHUB_OUTPUT"
+
+  e2e:
+    needs: detect
+    if: needs.detect.outputs.new == 'true'
+    uses: ./.github/workflows/e2e.yml
+    with:
+      orca_version: ${{ needs.detect.outputs.orca }}
+      from_orca_version: ${{ needs.detect.outputs.from }}
+      ref: ${{ needs.detect.outputs.ref }}
+
+  mark-tested:
+    needs: [detect, e2e]
+    if: needs.detect.outputs.new == 'true' && needs.e2e.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # A direct commit to main, as ADR 0006 has CI update the file: the
+      # change is data only, already validated by compatfile, and a PR would
+      # wait for a human while users keep the older Orca. Pushed with
+      # GITHUB_TOKEN, it triggers no other workflow.
+      - name: Commit the compatibility file
+        env:
+          ORCA: ${{ needs.detect.outputs.orca }}
+          ORCASM: ${{ needs.detect.outputs.orcasm }}
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/compatfile" ./internal/compat/compatfile
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for _ in 1 2 3; do
+            if [ "$("$RUNNER_TEMP/compatfile" mark compatibility.json "$ORCA" "$ORCASM")" = unchanged ]; then
+              echo "Orca $ORCA is already listed."
+              exit 0
+            fi
+            git commit -qm "Mark Orca $ORCA as tested with orcasm $ORCASM" compatibility.json
+            if git push origin HEAD:main; then
+              exit 0
+            fi
+            # main moved meanwhile: redo the edit on top of it.
+            git fetch -q origin main
+            git reset -q --hard origin/main
+          done
+          echo "Could not push to main." >&2
+          exit 1
+      - name: Close earlier failure issues for this Orca
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ORCA: ${{ needs.detect.outputs.orca }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh issue list --repo "$REPO" --state open --search "\"Orca v$ORCA fails the end-to-end suite\" in:title" --json number,title \
+            --jq ".[] | select(.title | startswith(\"Orca v$ORCA fails the end-to-end suite\")) | .number" |
+            while read -r n; do
+              gh issue close "$n" --repo "$REPO" --comment "Orca $ORCA now passes the end-to-end suite: $RUN_URL"
+            done
+
+  report-failure:
+    needs: [detect, e2e]
+    if: needs.detect.outputs.new == 'true' && needs.e2e.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update the failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TITLE: ${{ needs.detect.outputs.title }}
+          ORCA: ${{ needs.detect.outputs.orca }}
+          FROM: ${{ needs.detect.outputs.from }}
+          REF: ${{ needs.detect.outputs.ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          n=$(gh issue list --repo "$REPO" --state open --search "\"$TITLE\" in:title" --json number,title \
+            --jq "map(select(.title == env.TITLE)) | .[0].number // empty")
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --repo "$REPO" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "The end-to-end suite failed with Orca $ORCA (upgrading from $FROM) and orcasm $REF: $RUN_URL
+
+          Sandboxes stay on the Orca the compatibility file lists until this passes. Close this issue to have the watcher try again, or run orca-watch by hand with this Orca version."
+          fi
