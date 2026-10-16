@@ -33,6 +33,16 @@ compose=(docker compose -p main "${files[@]}")
 cmd=$1
 shift
 case $cmd in
-  up) exec "${compose[@]}" up -d "$@" ;;
+  up)
+    # The Worktree proxy (orcasm-proxy) owns the Sandbox's port 80 for
+    # http://<worktree>.localhost. A config error is left for `up` to report.
+    config=$("${compose[@]}" config 2>/dev/null || true)
+    if grep -Eq '^ +published: "?80"?$' <<<"$config"; then
+      echo "stack: Main's Stack publishes port 80, which the Worktree proxy uses to serve" >&2
+      echo "http://<worktree>.localhost in the Sandbox. Publish it on another host port" >&2
+      echo "(e.g. \"8080:80\") in the Compose files." >&2
+      exit 1
+    fi
+    exec "${compose[@]}" up -d "$@" ;;
   *) exec "${compose[@]}" "$cmd" "$@" ;;
 esac

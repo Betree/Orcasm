@@ -7,10 +7,10 @@ import (
 	"io"
 	"time"
 
+	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/repository"
 	"github.com/Betree/Orcasm/internal/wizard"
-	"github.com/Betree/Orcasm/internal/worktree"
 )
 
 // SSHAccess is the host's SSH access to Sandboxes. sshaccess.Access
@@ -68,10 +68,10 @@ func NewCreator(m msb.CLI, ssh SSHAccess, secretValue SecretValue, configDir, gu
 		SSH:       ssh,
 		AddRemote: repository.AddSandboxRemote,
 		RegisterInOrca: func(ctx context.Context, name, guestPath string) error {
-			return repository.RegisterInOrca(ctx, m.Sandbox(name), User, guestPath)
+			return repository.RegisterInOrca(ctx, m.Sandbox(name), guest.User, guestPath)
 		},
 		SetHooks: func(ctx context.Context, name, guestPath string) error {
-			_, err := m.Exec(ctx, name, User, worktree.Binary, "worktree", "install-hooks", guestPath)
+			_, err := m.Exec(ctx, name, guest.User, guest.Binary, "worktree", "install-hooks", guestPath)
 			return err
 		},
 		ConfigDir: configDir,
@@ -99,7 +99,7 @@ func (c Creator) Create(ctx context.Context, cfg wizard.Config, out io.Writer) e
 	err := c.Copy(ctx, cfg.Name, repository.CopyOptions{
 		HostPath:     cfg.ProjectPath,
 		GuestPath:    main,
-		Owner:        User,
+		Owner:        guest.User,
 		IgnoredFiles: cfg.Project.BringFiles,
 	})
 	if err != nil {

@@ -20,10 +20,19 @@ const (
 	ProxyContainer = "orcasm-proxy"
 )
 
-// proxyArgv is the root command starting the proxy. Docker's restart policy
-// brings it back on every Sandbox start.
+// proxyStarter replaces any previous proxy (a provisioning step run again)
+// with a new one. Args: start-proxy <container> <docker run args...>.
+const proxyStarter = `set -euo pipefail
+name=$1
+shift
+docker rm --force "$name" >/dev/null 2>&1 || true
+exec docker run --detach --name "$name" "$@"
+`
+
+// proxyArgv is the root command (re)starting the proxy. Docker's restart
+// policy brings it back on every Sandbox start.
 func proxyArgv() []string {
-	return []string{"docker", "run", "--detach", "--name", ProxyContainer,
+	return []string{"bash", "-c", proxyStarter, "start-proxy", ProxyContainer,
 		"--restart", "always",
 		"--network", "host",
 		"--volume", "/var/run/docker.sock:/var/run/docker.sock:ro",

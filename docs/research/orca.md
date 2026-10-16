@@ -727,3 +727,31 @@ What changed from the spike:
 - **The Workbench's home.** Only subdirs are mounted, so Docker creates `/home/dev`, `~/.cache`, `~/.local`... as root, and OpenCode failed with EACCES on `~/.cache/opencode`. `orcasm worktree workbench` chowns the root-owned dirs of the container's own filesystem under the home (`find -xdev`) to the agent's uid before each launch.
 - **Generic Workbench image.** `orcasm-workbench:24.04`, built from an inline Dockerfile (ubuntu:24.04 plus ca-certificates, curl, git, less, openssh-client), since Orca's hook scripts need curl and agents need git.
 - **OpenCode.** Orca's status plugin posts to `http://127.0.0.1:<port>` from JavaScript in OpenCode's config dir (or a per-launch overlay in `$OPENCODE_CONFIG_DIR`), and sends no PID. The wrapper copies that dir to `~/.cache/orcasm/opencode-config/<wrapper pid>` with the URL host rewritten to `$ORCASM_HOOK_HOST`, and points `OPENCODE_CONFIG_DIR` at the copy. OpenCode's binary is native glibc, like Claude's. **Its status reporting is not verified end to end** (no model login), nor are Codex hooks (no login); both launch in the Workbench (`--version` checked by the real test).
+
+## #18: setup runs on every Worktree, by policy rather than `--setup run`
+
+#18 asks for Worktrees created "with `--setup run`". orcasm does not depend on how a Worktree is created. Instead, `orcasm worktree install-hooks` sets Main's `hookSettings.setupRunPolicy` to `run-by-default` (`worktree.OrcaSettings`, unit-tested). In Orca 1.4.227, `prepareRuntimeLocalWorktreeSetup` decides from the creation request first and from that policy second (`src/main/runtime/runtime-local-worktree-setup.ts:11-15,37-60`, `src/main/effective-hook-config.ts:64-78`):
+
+- `--setup run` always runs setup.
+- `--setup inherit`, or no `--setup`, follows the policy. With `run-by-default` that means it runs, with no prompt. The UI's create flow follows the same policy.
+- `--setup skip` skips setup. This is the one way around it.
+
+So the policy covers every default path, which makes it equivalent to `--setup run` except where the user explicitly opts out. The real test `TestWorktreeHooksInARealSandbox` creates its Worktree with `orca-ide worktree create` and no `--setup`, and verified that setup still runs (Orca 1.4.227).
+
+**The Stack does not depend on setup running first, either.** The real test showed that Orca runs setup in a terminal of its own *after* `worktree create` returns. An agent launched right away, or in a Worktree created with `--setup skip`, therefore finds no Stack yet. In that case `orcasm worktree workbench`, which every agent wrapper calls, generates the Stack itself, as setup would, and starts it. A per-Stack file lock (`up.lock` in the Stack's state dir) keeps that from racing setup:
+
+- Setup takes the lock before generating, and hands it to the background `up`, which holds it until the Stack is up. An agent launched meanwhile waits for it, following `up.log`.
+- If an agent already holds the lock, setup leaves the Stack to it and returns. Waiting could outlast the hook's 2-minute timeout.
+- Agents launched together on a stopped Stack, for example after a Sandbox restart, start it once.
+
+So two `compose up --build` of one Stack never run at once.
+
+## Open after Milestone 2 (not verified)
+
+These are still open from #16 and #19. They need a model login or a real browser session, which the spikes did not have:
+
+- **Codex hook events end to end.** Codex launches in the Workbench, and its hooks call the same rewritten `codex-hook.sh` copy as Claude's, but no Codex session has reported status to Orca yet.
+- **OpenCode status.** The status plugin's URL is rewritten in the per-launch config copy, but no OpenCode session has reported working, waiting or done to Orca yet.
+- **Orca's real chat view (structured sessions).** Only the spawn shape (stream-json piped through the wrapper with no tty) was simulated. Driving the chat view from Orca's UI against a Workbench is untested.
+- **Agents surviving an Orca restart.** The hook relay follows Orca's new port, but a session that was running during the restart was not checked.
+- **Orca's Claude statusline script** (`claude-statusline.sh`). It is rewritten like the hook scripts, but its output was not checked.

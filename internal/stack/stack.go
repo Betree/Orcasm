@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,14 +111,30 @@ type Docker func(ctx context.Context, args ...string) ([]byte, error)
 
 // ExecDocker runs the docker CLI on PATH; stderr goes in the error.
 func ExecDocker(ctx context.Context, args ...string) ([]byte, error) {
-	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "docker", args...)
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	var stdout, stderr bytes.Buffer
+	err := runDocker(ctx, &stdout, &stderr, args)
 	if err != nil {
-		return out, fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
+		err = fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	return out, nil
+	return stdout.Bytes(), err
+}
+
+// StreamDocker runs the docker CLI on PATH with its output (stdout and
+// stderr) going to w, e.g. Compose's build progress to a log; it returns no
+// output.
+func StreamDocker(w io.Writer) Docker {
+	return func(ctx context.Context, args ...string) ([]byte, error) {
+		return nil, runDocker(ctx, w, w, args)
+	}
+}
+
+func runDocker(ctx context.Context, stdout, stderr io.Writer, args []string) error {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("docker %s: %w", strings.Join(args, " "), err)
+	}
+	return nil
 }
 
 // Checkout is one Repository's git worktree within a Worktree.
@@ -136,26 +153,34 @@ type Checkout struct {
 	GitDir string
 }
 
+// Settings are what every Worktree's Stack in a Sandbox is generated with:
+// the Project's Compose answers (from wizard.Project) and the Sandbox's
+// harnesses, secrets and user. Provisioning writes them in the Sandbox
+// (worktree.Config).
+type Settings struct {
+	// ComposeFiles are relative to the Project, as in wizard.Project.
+	ComposeFiles []string `json:"compose_files,omitempty"`
+	// Workbench is the Compose service used as Workbench; "" adds
+	// GenericWorkbench.
+	Workbench string `json:"workbench,omitempty"`
+	// WebService and WebPort are the Project's web app, if any.
+	WebService string `json:"web_service,omitempty"`
+	WebPort    int    `json:"web_port,omitempty"`
+	// Harnesses are the agent harnesses installed in the Sandbox.
+	Harnesses []string `json:"harnesses,omitempty"`
+	// Secrets are the names of the Sandbox's msb secrets.
+	Secrets []string `json:"secrets,omitempty"`
+	// Home is the Sandbox user's home directory.
+	Home string `json:"home"`
+}
+
 // Spec is everything a Stack is generated from.
 type Spec struct {
 	// Worktree is the Worktree's name.
 	Worktree string
 	// Checkouts are the Worktree's git worktrees, one per Repository.
 	Checkouts []Checkout
-	// ComposeFiles are relative to the Project, as in wizard.Project.
-	ComposeFiles []string
-	// Workbench is the Compose service used as Workbench; "" adds
-	// GenericWorkbench.
-	Workbench string
-	// WebService and WebPort are the Project's web app, if any.
-	WebService string
-	WebPort    int
-	// Harnesses are the agent harnesses installed in the Sandbox.
-	Harnesses []string
-	// Secrets are the names of the Sandbox's msb secrets.
-	Secrets []string
-	// Home is the Sandbox user's home directory.
-	Home string
+	Settings
 }
 
 // Stack is a generated Stack, ready for `docker compose`.
@@ -209,6 +234,10 @@ func Generate(ctx context.Context, docker Docker, spec Spec, dir string) (Stack,
 	}
 	if st.WebService != "" && !slices.Contains(services, st.WebService) {
 		return Stack{}, fmt.Errorf("web service %q is not in the Compose files %v", st.WebService, spec.ComposeFiles)
+	}
+	if st.WebService != "" && (st.WebPort < 1 || st.WebPort > 65535) {
+		// The proxy routes to this port: 0 would give a dead route.
+		return Stack{}, fmt.Errorf("web service %q needs its web port (1-65535), got %d", st.WebService, st.WebPort)
 	}
 
 	// Created up front, by the Sandbox user: Docker would create them as

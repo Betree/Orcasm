@@ -2,7 +2,7 @@ package sandbox
 
 // Provisioning: a microsandbox sandbox with systemd, Docker, Orca (served to the
 // host's browser), the selected agent harnesses and gh, all used through the
-// non-root User.
+// non-root guest.User.
 
 import (
 	"context"
@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/wizard"
 )
@@ -21,9 +22,6 @@ import (
 const (
 	// Image is the Sandbox base image (systemd as PID 1).
 	Image = "ghcr.io/superradcompany/ubuntu-systemd:24.04"
-	// User is the guest user owning Main and running Orca and agents
-	// (ADR 0003; SSH logs in as it, see docs/research/microsandbox.md §11).
-	User = "dev"
 	// OrcaVersion is the Orca release installed in new Sandboxes (ADR 0006).
 	OrcaVersion = "1.4.227"
 	// OrcaPort is the guest port `orca-ide serve` listens on.
@@ -52,10 +50,10 @@ type CreateMSB interface {
 var provisionScript string
 
 // MainPath is where Main lives in the Sandbox for the Project at projectPath.
-// It exists (empty, owned by User) once Provision returns, and is the
+// It exists (empty, owned by guest.User) once Provision returns, and is the
 // working directory of msb exec and SSH sessions.
 func MainPath(projectPath string) string {
-	return path.Join("/home", User, filepath.Base(projectPath))
+	return path.Join(guest.Home, filepath.Base(projectPath))
 }
 
 // SecretValue reads a Secret's value on the host (wizard.Host.SecretValue).
@@ -115,7 +113,7 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 		return fmt.Errorf("install the agent wrappers in Sandbox %s: %w", cfg.Name, err)
 	}
 	argv := append([]string{"bash", "-c", provisionScript, "provision",
-		User, strconv.Itoa(cfg.HostPort), OrcaVersion, main, cfg.Git.Name, cfg.Git.Email},
+		guest.User, strconv.Itoa(cfg.HostPort), OrcaVersion, main, cfg.Git.Name, cfg.Git.Email},
 		cfg.Harnesses...)
 	if err := m.ExecStreaming(ctx, cfg.Name, "", out, argv...); err != nil {
 		return fmt.Errorf("provision Sandbox %s (kept for inspection; `msb rm --force %s` to discard): %w",

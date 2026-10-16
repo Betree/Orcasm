@@ -12,10 +12,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/Betree/Orcasm/internal/stack"
 	"io"
 	"net"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -146,17 +146,20 @@ func forward(c net.Conn, target string) {
 	wg.Wait()
 }
 
-// DockerBridge is the gateway address of Docker's default bridge network,
-// which host.docker.internal (host-gateway) resolves to in containers.
-func DockerBridge(ctx context.Context) (string, error) {
-	out, err := exec.CommandContext(ctx, "docker", "network", "inspect", "bridge", "--format", "{{range .IPAM.Config}}{{.Gateway}} {{end}}").Output()
-	if err != nil {
-		return "", fmt.Errorf("finding Docker's bridge address: %w", err)
-	}
-	for _, f := range strings.Fields(string(out)) {
-		if ip := net.ParseIP(f); ip != nil && ip.To4() != nil {
-			return f, nil
+// DockerBridge finds, through docker, the gateway address of Docker's
+// default bridge network, which host.docker.internal (host-gateway)
+// resolves to in containers.
+func DockerBridge(docker stack.Docker) func(ctx context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		out, err := docker(ctx, "network", "inspect", "bridge", "--format", "{{range .IPAM.Config}}{{.Gateway}} {{end}}")
+		if err != nil {
+			return "", fmt.Errorf("finding Docker's bridge address: %w", err)
 		}
+		for _, f := range strings.Fields(string(out)) {
+			if ip := net.ParseIP(f); ip != nil && ip.To4() != nil {
+				return f, nil
+			}
+		}
+		return "", fmt.Errorf("Docker's bridge network has no IPv4 gateway (%q)", strings.TrimSpace(string(out)))
 	}
-	return "", fmt.Errorf("Docker's bridge network has no IPv4 gateway (%q)", strings.TrimSpace(string(out)))
 }

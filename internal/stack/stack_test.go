@@ -345,6 +345,19 @@ func TestAWebServiceMissingFromTheComposeFilesIsRefused(t *testing.T) {
 	}
 }
 
+// The proxy routes to the web service's port: without one, Traefik would
+// get port 0 and the Worktree's URL would never answer.
+func TestAWebServiceWithoutAValidPortIsRefused(t *testing.T) {
+	for _, port := range []int{0, -1, 65536} {
+		s := spec(t)
+		s.WebService, s.WebPort = "web", port
+		_, err := stack.Generate(context.Background(), (&fakeDocker{services: []string{"app", "web"}}).run, s, t.TempDir())
+		if err == nil || !strings.Contains(err.Error(), "port") {
+			t.Errorf("port %d: err = %v, want one about the web port", port, err)
+		}
+	}
+}
+
 func mappingOf(m map[string]yaml.Node) *yaml.Node {
 	n := &yaml.Node{Kind: yaml.MappingNode}
 	for k, v := range m {

@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/sandbox"
 	"github.com/Betree/Orcasm/internal/wizard"
@@ -64,7 +65,7 @@ env -i PATH=/usr/bin:/bin curl -fsS -o /dev/null https://github.com && echo tls-
 systemctl is-active orca; ps -o user= -C orca-ide | sort -u
 git config user.name; echo "$ORCASM_TEST_TOKEN"
 curl -sS -o /dev/null -w 'proxy %{http_code}\n' http://no-such-worktree.localhost/`
-	out, err := sb.Exec(ctx, sandbox.User, "bash", "-lc", checks)
+	out, err := sb.Exec(ctx, guest.User, "bash", "-lc", checks)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -87,7 +88,7 @@ curl -fsS -o /dev/null http://127.0.0.1:8080/ && echo web-ok
 docker compose ls -q
 stack down >/dev/null 2>&1
 echo "after: $(docker ps -aq --filter label=com.docker.compose.project | wc -l)"`
-	out, err = sb.Exec(ctx, sandbox.User, "bash", "-lc", stack)
+	out, err = sb.Exec(ctx, guest.User, "bash", "-lc", stack)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
