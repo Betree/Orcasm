@@ -63,6 +63,34 @@ func Parse(raw []byte) (File, error) {
 	return f, nil
 }
 
+// MarkTested records that the end-to-end suite passed with Orca e.Version
+// and orcasm e.MinOrcasm, for CI's Orca release watcher (#24). It returns the
+// rewritten file, or raw unchanged and added false when that Orca is
+// already listed: its recorded min_orcasm, the oldest it passed with, stays.
+// A corrupt raw is an error rather than replaced, so a bad edit is caught
+// before it is published.
+func MarkTested(raw []byte, e Entry) (out []byte, added bool, err error) {
+	f, err := Parse(raw)
+	if err != nil {
+		return nil, false, err
+	}
+	e.Version, e.MinOrcasm = strings.TrimPrefix(e.Version, "v"), strings.TrimPrefix(e.MinOrcasm, "v")
+	if !isRelease(e.Version) || !isRelease(e.MinOrcasm) {
+		return nil, false, fmt.Errorf("compatibility entry %+v: want release numbers", e)
+	}
+	for _, have := range f.Releases {
+		if Compare(have.Version, e.Version) == 0 {
+			return raw, false, nil
+		}
+	}
+	f.Releases = append(f.Releases, e)
+	out, err = json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	return append(out, '\n'), true, nil
+}
+
 // Orca is the newest Orca release tested with an orcasm at orcasmVersion or
 // older. A development build (a version that is not a release number, like
 // "dev") takes the newest of all. ok is false when none qualifies.

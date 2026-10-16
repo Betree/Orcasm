@@ -93,6 +93,40 @@ func TestTheRepositorysCompatibilityFileIsValid(t *testing.T) {
 	}
 }
 
+func TestMarkingAnOrcaTestedAddsItAsTheNewestForThatOrcasm(t *testing.T) {
+	out, added, err := compat.MarkTested([]byte(published), compat.Entry{Version: "v1.4.231", MinOrcasm: "v0.3.1"})
+	if err != nil || !added {
+		t.Fatalf("MarkTested = %v, %v", added, err)
+	}
+	f := parse(t, string(out))
+	if got, _ := f.Orca("0.3.1"); got != "1.4.231" {
+		t.Errorf("Orca(0.3.1) = %q, want 1.4.231", got)
+	}
+	if got, _ := f.Orca("0.3.0"); got != "1.4.230" {
+		t.Errorf("Orca(0.3.0) = %q, want 1.4.230: older orcasms never ran 1.4.231", got)
+	}
+	if !strings.HasSuffix(string(out), "}\n") {
+		t.Errorf("want a trailing newline: %q", out)
+	}
+}
+
+func TestMarkingAnAlreadyListedOrcaTestedChangesNothing(t *testing.T) {
+	// The oldest orcasm it passed with stays the one recorded.
+	out, added, err := compat.MarkTested([]byte(published), compat.Entry{Version: "1.4.229", MinOrcasm: "0.3.0"})
+	if err != nil || added {
+		t.Fatalf("MarkTested = %v, %v; want nothing added", added, err)
+	}
+	if string(out) != published {
+		t.Errorf("file rewritten:\n%s", out)
+	}
+}
+
+func TestACorruptCompatibilityFileIsNotRewritten(t *testing.T) {
+	if _, _, err := compat.MarkTested([]byte(`{"orca": [`), compat.Entry{Version: "1.4.231", MinOrcasm: "0.0.0"}); err == nil {
+		t.Error("want an error")
+	}
+}
+
 func TestFetchReadsThePublishedFile(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(published))

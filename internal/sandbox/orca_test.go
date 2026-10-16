@@ -61,6 +61,24 @@ func TestWithNoOrcaTestedWithThisOrcasmTheBuiltInOneIsDesired(t *testing.T) {
 	}
 }
 
+func TestTheOrcaVersionOverrideWinsOverTheCompatibilityFileAndLatest(t *testing.T) {
+	// The end-to-end suite tests an Orca release before the compatibility
+	// file lists it (#24).
+	t.Setenv("ORCASM_ORCA_VERSION", "1.4.250")
+	src := sandbox.NewOrcaSource("0.2.0")
+	src.FileURL, src.LatestURL = "http://127.0.0.1:1/unreachable", "http://127.0.0.1:1/unreachable"
+
+	for _, latest := range []bool{false, true} {
+		got, from, err := src.Desired(context.Background(), latest)
+		if err != nil || got != "1.4.250" {
+			t.Errorf("Desired(latest=%v) = %q, %v; want 1.4.250", latest, got, err)
+		}
+		if !strings.Contains(from, "ORCASM_ORCA_VERSION") {
+			t.Errorf("from = %q, want it to name the override", from)
+		}
+	}
+}
+
 func TestLatestBypassesTheCompatibilityFile(t *testing.T) {
 	src := orcaServer(t, `{"orca": [{"version": "1.4.230", "min_orcasm": "0.0.0"}]}`)
 
