@@ -48,7 +48,7 @@ func TestCopyIntoRealSandbox(t *testing.T) {
 	if out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}
-	// msb's SSH logs in as root; the host remote fetches through it.
+	// Root (msb exec's default user) can fetch from the copy owned by another user.
 	if _, err := sb.Exec(ctx, "", "git", "ls-remote", dest); err != nil {
 		t.Errorf("root cannot read the copy (host fetch would fail): %v", err)
 	}

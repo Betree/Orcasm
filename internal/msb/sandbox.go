@@ -1,5 +1,3 @@
-// Package msb drives microsandbox through its `msb` CLI (validated against
-// msb 0.7.8).
 package msb
 
 import (
@@ -10,7 +8,8 @@ import (
 	"strings"
 )
 
-// Sandbox is a running microsandbox sandbox, addressed by name.
+// Sandbox is a running microsandbox sandbox, addressed by name. Exec and
+// CopyIn drive `msb exec` / `msb copy` (validated against PinnedVersion).
 type Sandbox struct {
 	Name string
 }

@@ -107,7 +107,8 @@ git reset -q --hard
 xargs -0 -r rm -rf -- < "$stage/deleted"
 tar -xf "$stage/worktree.tar"
 chown -R "$owner:" "$dest"
-# msb's SSH logs in as root; let root's git (the host remote) read the copy.
+# Let other users (root via msb exec or ssh -o User=root) run git on the copy
+# without "dubious ownership" errors; upload-pack (host fetch) checks this too.
 if [ "$(id -un)" != "$owner" ]; then
   for safe in "$dest" "$dest/.git"; do # upload-pack checks the gitdir
     git config --system --get-all safe.directory | grep -qxF "$safe" ||
