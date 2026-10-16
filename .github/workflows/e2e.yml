@@ -54,7 +54,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
       - name: Install the pinned msb
-        run: .github/scripts/install-msb.sh
+        run: internal/msb/install-msb.sh
       - name: End-to-end suite
         env:
           ORCASM_E2E: "1"
