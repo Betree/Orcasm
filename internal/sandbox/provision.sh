@@ -1,16 +1,16 @@
 # Provisions a fresh ubuntu-systemd:24.04 Sandbox. Runs as root via
-# `msb exec ... bash -c <this> provision <user> <hostport> <orca-version> [harness...]`.
+# `msb exec ... bash -c <this> provision <user> <hostport> <orca-version> <main> [harness...]`.
 # Every step is safe to re-run.
 set -euo pipefail
-user=$1 hostport=$2 orca_version=$3
-shift 3
+user=$1 hostport=$2 orca_version=$3 main=$4
+shift 4
 harnesses=("$@")
 export DEBIAN_FRONTEND=noninteractive
 step() { echo "==> $*"; }
 
 step "Installing base packages, Docker and gh"
-apt-get update -q
-apt-get install -y -q --no-install-recommends \
+apt-get update -qq
+apt-get install -y -qq --no-install-recommends >/dev/null \
   ca-certificates curl wget tar git rsync less \
   docker.io docker-compose-v2 gh \
   nodejs npm \
@@ -26,18 +26,29 @@ step "Creating user $user"
 if ! id "$user" >/dev/null 2>&1; then
   useradd -m -s /bin/bash "$user"
 fi
-# The Sandbox's workdir may have pre-created the home directory as root.
-cp -rnT /etc/skel "/home/$user"
+# Main (the Sandbox's workdir) is created before boot, so the home directory
+# already exists and useradd skips /etc/skel.
+cp -rT --update=none /etc/skel "/home/$user"
 usermod -aG docker "$user"
 chown -R "$user:$user" "/home/$user"
-systemctl enable --now docker >/dev/null 2>&1
+mkdir -p "$main"
+chown "$user:$user" "$main"
+
+step "Starting Docker"
+# Docker 29 defaults to the containerd image store under /var/lib/containerd,
+# on the overlay root, where overlay mounts fail with EINVAL. The classic
+# store keeps everything on the /var/lib/docker disk.
+mkdir -p /etc/docker
+[ -e /etc/docker/daemon.json ] || echo '{"features":{"containerd-snapshotter":false}}' >/etc/docker/daemon.json
+systemctl enable docker >/dev/null 2>&1
+systemctl restart docker
 docker info >/dev/null
 
 step "Installing Orca $orca_version"
 if [ "$(dpkg-query -W -f='${Version}' orca-ide 2>/dev/null || true)" != "$orca_version" ]; then
   deb=/tmp/orca-ide_${orca_version}.deb
   curl -fsSL -o "$deb" "https://github.com/stablyai/orca/releases/download/v${orca_version}/orca-ide_${orca_version}_$(dpkg --print-architecture).deb"
-  apt-get install -y -q --no-install-recommends "$deb"
+  apt-get install -y -qq --no-install-recommends "$deb" >/dev/null
   rm -f "$deb"
 fi
 
@@ -66,6 +77,7 @@ StartLimitBurst=3
 User=$user
 WorkingDirectory=/home/$user
 Environment=ORCA_SERVE_RUNTIME=electron
+Environment=PATH=/home/$user/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=NODE_EXTRA_CA_CERTS=$ca_bundle
 ExecStart=/usr/bin/orca-ide serve --port 6768 --pairing-address 127.0.0.1:$hostport
 Restart=on-failure

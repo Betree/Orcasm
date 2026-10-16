@@ -135,15 +135,33 @@ func TestCopyKeepsDetachedHead(t *testing.T) {
 	}
 }
 
-func TestCopyRefusesExistingDestination(t *testing.T) {
+func TestCopyRefusesNonEmptyDestination(t *testing.T) {
 	host := newHostRepo(t)
 	dest := t.TempDir()
+	write(t, filepath.Join(dest, "stray"), "x\n")
 
 	err := repository.Copy(context.Background(), localSandbox{}, repository.CopyOptions{
 		HostPath: host, GuestPath: dest, Owner: currentUser(t),
 	})
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("err = %v, want already exists", err)
+	}
+}
+
+// Provisioning pre-creates Main empty, because msb needs a Sandbox's workdir
+// to exist at boot.
+func TestCopyFillsAnEmptyDestination(t *testing.T) {
+	host := newHostRepo(t)
+	dest := t.TempDir()
+
+	err := repository.Copy(context.Background(), localSandbox{}, repository.CopyOptions{
+		HostPath: host, GuestPath: dest, Owner: currentUser(t),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := git(t, dest, "log", "-1", "--format=%s"); got == "" {
+		t.Errorf("want the Repository copied into the empty destination")
 	}
 }
 

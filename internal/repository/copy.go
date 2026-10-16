@@ -31,7 +31,8 @@ type Sandbox interface {
 type CopyOptions struct {
 	// HostPath is the Repository's working tree on the host.
 	HostPath string
-	// GuestPath is where the Repository lands in the Sandbox. It must not exist.
+	// GuestPath is where the Repository lands in the Sandbox. It must not exist
+	// or be an empty directory (provisioning pre-creates Main).
 	GuestPath string
 	// Owner is the guest user that will own the copy (the user Orca runs as).
 	Owner string
@@ -93,7 +94,7 @@ func Copy(ctx context.Context, sb Sandbox, opts CopyOptions) error {
 // owner, HEAD (a "refs/heads/..." name or a commit id).
 const guestScript = `
 stage=$1 dest=$2 owner=$3 head=$4
-if [ -e "$dest" ]; then echo "$dest already exists" >&2; exit 1; fi
+if [ -n "$(ls -A "$dest" 2>/dev/null)" ]; then echo "$dest already exists and is not empty" >&2; exit 1; fi
 mkdir -p "$dest"
 cd "$dest"
 git init -q

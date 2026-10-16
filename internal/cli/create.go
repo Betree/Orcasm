@@ -1,17 +1,26 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
 	"github.com/spf13/cobra"
 
+	"github.com/Betree/Orcasm/internal/msb"
+	"github.com/Betree/Orcasm/internal/sandbox"
 	"github.com/Betree/Orcasm/internal/wizard"
 )
 
 func init() { register(newCreateCmd) }
+
+// provision creates and provisions the Sandbox; tests swap it out.
+var provision = func(ctx context.Context, cfg wizard.Config, out io.Writer) error {
+	return sandbox.Provision(ctx, msb.CLI{}, cfg, out)
+}
 
 func newCreateCmd(BuildInfo) *cobra.Command {
 	var answersFile string
@@ -40,7 +49,14 @@ func newCreateCmd(BuildInfo) *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			fmt.Fprintln(out, "# Sandbox configuration")
-			return toml.NewEncoder(out).Encode(cfg)
+			if err := toml.NewEncoder(out).Encode(cfg); err != nil {
+				return err
+			}
+			if err := provision(cmd.Context(), cfg, out); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "Sandbox %s is ready. Orca's web UI is served on http://127.0.0.1:%d/\n", cfg.Name, cfg.HostPort)
+			return nil
 		},
 	}
 	// For non-interactive runs (CI, end-to-end tests): a TOML file shaped

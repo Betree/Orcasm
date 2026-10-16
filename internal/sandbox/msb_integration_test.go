@@ -1,0 +1,75 @@
+//go:build msb
+
+package sandbox_test
+
+// Provisions a real Sandbox (several minutes, needs network) and removes it:
+//
+//	ORCASM_TEST_SANDBOX=<throwaway name> ORCASM_TEST_PORT=<free host port> \
+//	  go test -tags msb -timeout 20m ./internal/sandbox/
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/Betree/Orcasm/internal/msb"
+	"github.com/Betree/Orcasm/internal/sandbox"
+	"github.com/Betree/Orcasm/internal/wizard"
+)
+
+func TestProvisionARealSandbox(t *testing.T) {
+	name := os.Getenv("ORCASM_TEST_SANDBOX")
+	port, _ := strconv.Atoi(os.Getenv("ORCASM_TEST_PORT"))
+	if name == "" || port == 0 {
+		t.Skip("ORCASM_TEST_SANDBOX / ORCASM_TEST_PORT not set")
+	}
+	ctx := context.Background()
+	t.Cleanup(func() { exec.Command("msb", "rm", "--force", name).Run() })
+	cfg := wizard.Config{
+		Folder:    "/home/someone/code/demo",
+		Name:      name,
+		Resources: wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:  port,
+		Harnesses: []string{"claude", "codex", "opencode"},
+	}
+
+	if err := sandbox.Provision(ctx, msb.CLI{}, cfg, testWriter{t}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get("http://127.0.0.1:" + strconv.Itoa(port) + "/web-index.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != 200 || !strings.Contains(string(body), "<title>Orca Web</title>") {
+		t.Errorf("web UI on host port: %d %.200s", resp.StatusCode, body)
+	}
+
+	sb := msb.Sandbox{Name: name}
+	checks := `pwd; stat -c %U "$PWD"; id -nG | tr ' ' '\n' | grep -x docker
+for c in git rsync curl gh claude codex opencode; do command -v $c >/dev/null || echo "missing $c"; done
+docker run --rm hello-world >/dev/null && echo docker-ok
+systemctl is-active orca; ps -o user= -C orca-ide | sort -u`
+	out, err := sb.Exec(ctx, sandbox.User, "bash", "-lc", checks)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\nactive\ndev\n"
+	if out != want {
+		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+}
+
+type testWriter struct{ t *testing.T }
+
+func (w testWriter) Write(p []byte) (int, error) {
+	w.t.Log(strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
