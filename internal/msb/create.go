@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sort"
 	"strconv"
 	"strings"
 )
@@ -17,8 +16,8 @@ import (
 type CreateOptions struct {
 	Image string
 	Name  string
-	// Labels are attached as KEY=VALUE.
-	Labels      map[string]string
+	// Labels are "KEY=VALUE" strings.
+	Labels      []string
 	CPUs        int
 	MemoryGiB   int
 	RootDiskGiB int
@@ -71,13 +70,8 @@ func (o CreateOptions) Args() []string {
 	if o.RootDiskGiB > 0 {
 		args = append(args, "--root-disk", fmt.Sprintf("%dG", o.RootDiskGiB))
 	}
-	keys := make([]string, 0, len(o.Labels))
-	for k := range o.Labels {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		args = append(args, "--label", k+"="+o.Labels[k])
+	for _, l := range o.Labels {
+		args = append(args, "--label", l)
 	}
 	for _, d := range o.OwnedDisks {
 		args = append(args, "--mount-owned", fmt.Sprintf("%s:kind=disk,size=%dG", d.Path, d.SizeGiB))
@@ -107,20 +101,6 @@ func (c CLI) Create(ctx context.Context, opts CreateOptions) error {
 		env = append(env, sec.Name+"="+sec.Value)
 	}
 	return c.stream(ctx, io.Discard, env, opts.Args()...)
-}
-
-// Names lists every sandbox name (`msb list --quiet`).
-func (c CLI) Names(ctx context.Context) ([]string, error) {
-	var out bytes.Buffer
-	if err := c.stream(ctx, &out, nil, "list", "--quiet"); err != nil {
-		return nil, err
-	}
-	return strings.Fields(out.String()), nil
-}
-
-// Remove force-removes the sandbox (`msb rm --force`).
-func (c CLI) Remove(ctx context.Context, name string) error {
-	return c.stream(ctx, io.Discard, nil, "rm", "--force", name)
 }
 
 // ExecTo runs argv in sandbox name as user ("" means root) with no stdin,

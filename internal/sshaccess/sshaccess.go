@@ -56,6 +56,14 @@ func Default(m MSB) (Access, error) {
 // HostAlias is the ssh host name of a Sandbox.
 func HostAlias(name string) string { return "orcasm-" + name }
 
+// Command is the ssh command line that logs into the Sandbox, with extra ssh
+// options before the host. It reads orcasm's own ssh config, so it works
+// whether or not ~/.ssh/config includes it.
+func (a Access) Command(name string, opts ...string) []string {
+	argv := append([]string{"ssh", "-F", a.configPath()}, opts...)
+	return append(argv, HostAlias(name))
+}
+
 func (a Access) configPath() string     { return filepath.Join(a.Dir, "config") }
 func (a Access) keyPath() string        { return filepath.Join(a.Dir, "id_ed25519") }
 func (a Access) knownHostsPath() string { return filepath.Join(a.Dir, "known_hosts") }

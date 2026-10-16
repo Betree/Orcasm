@@ -1,7 +1,8 @@
-// Package sandbox creates and provisions Sandboxes: a microsandbox VM with
-// systemd, Docker, Orca (served to the host's browser), the selected agent
-// harnesses and gh, all used through the non-root User.
 package sandbox
+
+// Provisioning: a microsandbox VM with systemd, Docker, Orca (served to the
+// host's browser), the selected agent harnesses and gh, all used through the
+// non-root User.
 
 import (
 	"context"
@@ -32,19 +33,18 @@ const (
 	Schema = 0
 )
 
-// Labels on every Sandbox.
+// Labels Provision adds to CreateLabels.
 const (
-	LabelOrcasm  = "orcasm"         // always "1"; `msb ls --label orcasm=1` lists Sandboxes
-	LabelProject = "orcasm.project" // absolute Project folder on the host
-	LabelPort    = "orcasm.port"    // host port of Orca's web UI
-	LabelSchema  = "orcasm.schema"  // last applied migration
+	LabelPort   = "orcasm.port"   // host port of Orca's web UI
+	LabelSchema = "orcasm.schema" // last applied migration
 )
 
-// MSB is the slice of microsandbox Provision needs. msb.CLI implements it.
-type MSB interface {
+// CreateMSB is the slice of microsandbox Provision needs. msb.CLI
+// implements it.
+type CreateMSB interface {
 	Create(ctx context.Context, opts msb.CreateOptions) error
 	Remove(ctx context.Context, name string) error
-	Names(ctx context.Context) ([]string, error)
+	List(ctx context.Context, labels ...string) ([]msb.Listing, error)
 	ExecTo(ctx context.Context, name, user string, out io.Writer, argv ...string) error
 }
 
@@ -67,14 +67,14 @@ type SecretValue func(wizard.Secret) (string, error)
 //
 // cfg.Secrets become msb secrets, valued through secretValue; every later
 // `msb start` of the Sandbox needs those values again.
-func Provision(ctx context.Context, m MSB, cfg wizard.Config, secretValue SecretValue, out io.Writer) error {
+func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue SecretValue, out io.Writer) error {
 	// Checked here, not just in the Wizard: a failed create is cleaned up
 	// with `msb rm`, which must never hit someone else's sandbox.
-	names, err := m.Names(ctx)
+	all, err := m.List(ctx)
 	if err != nil {
 		return err
 	}
-	if slices.Contains(names, cfg.Name) {
+	if slices.ContainsFunc(all, func(l msb.Listing) bool { return l.Name == cfg.Name }) {
 		return fmt.Errorf("a sandbox named %s already exists", cfg.Name)
 	}
 	main := MainPath(cfg.Folder)
@@ -89,12 +89,9 @@ func Provision(ctx context.Context, m MSB, cfg wizard.Config, secretValue Secret
 	opts := msb.CreateOptions{
 		Image: Image,
 		Name:  cfg.Name,
-		Labels: map[string]string{
-			LabelOrcasm:  "1",
-			LabelProject: cfg.Folder,
-			LabelPort:    strconv.Itoa(cfg.HostPort),
-			LabelSchema:  strconv.Itoa(Schema),
-		},
+		Labels: append(CreateLabels(cfg.Folder, main),
+			LabelPort+"="+strconv.Itoa(cfg.HostPort),
+			LabelSchema+"="+strconv.Itoa(Schema)),
 		CPUs:        cfg.Resources.CPUs,
 		MemoryGiB:   cfg.Resources.MemoryGiB,
 		RootDiskGiB: cfg.Resources.RootDiskGiB,

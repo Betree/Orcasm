@@ -18,24 +18,24 @@ type execCall struct {
 	argv       []string
 }
 
-// fakeMSB records what Provision asks of microsandbox.
-type fakeMSB struct {
+// fakeCreateMSB records what Provision asks of microsandbox.
+type fakeCreateMSB struct {
 	created   []msb.CreateOptions
 	execs     []execCall
 	removed   []string
-	existing  []string
+	existing  []msb.Listing
 	createErr error
 	execErr   error
 }
 
-func (f *fakeMSB) Create(_ context.Context, opts msb.CreateOptions) error {
+func (f *fakeCreateMSB) Create(_ context.Context, opts msb.CreateOptions) error {
 	f.created = append(f.created, opts)
 	return f.createErr
 }
 
-func (f *fakeMSB) Names(context.Context) ([]string, error) { return f.existing, nil }
+func (f *fakeCreateMSB) List(context.Context, ...string) ([]msb.Listing, error) { return f.existing, nil }
 
-func (f *fakeMSB) Remove(_ context.Context, name string) error {
+func (f *fakeCreateMSB) Remove(_ context.Context, name string) error {
 	f.removed = append(f.removed, name)
 	return nil
 }
@@ -48,7 +48,7 @@ func hostValues(s wizard.Secret) (string, error) {
 	return "", errors.New("no value on the host")
 }
 
-func (f *fakeMSB) ExecTo(_ context.Context, name, user string, out io.Writer, argv ...string) error {
+func (f *fakeCreateMSB) ExecTo(_ context.Context, name, user string, out io.Writer, argv ...string) error {
 	f.execs = append(f.execs, execCall{name, user, argv})
 	io.WriteString(out, "==> progress\n")
 	return f.execErr
@@ -66,18 +66,19 @@ func demoConfig() wizard.Config {
 }
 
 func TestProvisionCreatesTheSandboxFromTheWizardConfig(t *testing.T) {
-	f := &fakeMSB{}
+	f := &fakeCreateMSB{}
 	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	want := msb.CreateOptions{
 		Image: "ghcr.io/superradcompany/ubuntu-systemd:24.04",
 		Name:  "demo",
-		Labels: map[string]string{
-			"orcasm":         "1",
-			"orcasm.project": "/home/u/code/demo",
-			"orcasm.port":    "6769",
-			"orcasm.schema":  "0",
+		Labels: []string{
+			"orcasm=1",
+			"orcasm.folder=/home/u/code/demo",
+			"orcasm.main=/home/dev/demo",
+			"orcasm.port=6769",
+			"orcasm.schema=0",
 		},
 		CPUs:        4,
 		MemoryGiB:   8,
@@ -94,7 +95,7 @@ func TestProvisionCreatesTheSandboxFromTheWizardConfig(t *testing.T) {
 }
 
 func TestProvisionRunsTheProvisioningScriptAsRoot(t *testing.T) {
-	f := &fakeMSB{}
+	f := &fakeCreateMSB{}
 	var out strings.Builder
 	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, &out); err != nil {
 		t.Fatal(err)
@@ -120,7 +121,7 @@ func TestProvisionRunsTheProvisioningScriptAsRoot(t *testing.T) {
 }
 
 func TestProvisionReportsAFailedProvisioning(t *testing.T) {
-	f := &fakeMSB{execErr: errors.New("apt-get exploded")}
+	f := &fakeCreateMSB{execErr: errors.New("apt-get exploded")}
 	err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "apt-get exploded") || !strings.Contains(err.Error(), "demo") {
 		t.Fatalf("want error naming the Sandbox and the cause, got %v", err)
@@ -128,7 +129,7 @@ func TestProvisionReportsAFailedProvisioning(t *testing.T) {
 }
 
 func TestProvisionHandsApprovedSecretsToMSBWithTheirHostValues(t *testing.T) {
-	f := &fakeMSB{}
+	f := &fakeCreateMSB{}
 	cfg := demoConfig()
 	cfg.Secrets = []wizard.Secret{{
 		Name: "GH_TOKEN", Hosts: []string{"github.com", "api.github.com"},
@@ -144,7 +145,7 @@ func TestProvisionHandsApprovedSecretsToMSBWithTheirHostValues(t *testing.T) {
 }
 
 func TestProvisionStopsBeforeCreatingWhenASecretHasNoValue(t *testing.T) {
-	f := &fakeMSB{}
+	f := &fakeCreateMSB{}
 	cfg := demoConfig()
 	cfg.Secrets = []wizard.Secret{{Name: "OPENAI_API_KEY", Hosts: []string{"api.openai.com"}}}
 	err := sandbox.Provision(context.Background(), f, cfg, hostValues, io.Discard)
@@ -158,7 +159,7 @@ func TestProvisionStopsBeforeCreatingWhenASecretHasNoValue(t *testing.T) {
 
 // A failed `msb create` leaves a stopped record behind that blocks the name.
 func TestProvisionRemovesTheSandboxRecordWhenCreateFails(t *testing.T) {
-	f := &fakeMSB{createErr: errors.New("boom")}
+	f := &fakeCreateMSB{createErr: errors.New("boom")}
 	err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("want the create error, got %v", err)
@@ -172,7 +173,7 @@ func TestProvisionRemovesTheSandboxRecordWhenCreateFails(t *testing.T) {
 }
 
 func TestProvisionNeverTouchesAnExistingSandbox(t *testing.T) {
-	f := &fakeMSB{existing: []string{"oc-dev", "demo"}, createErr: errors.New("already exists")}
+	f := &fakeCreateMSB{existing: []msb.Listing{{Name: "oc-dev"}, {Name: "demo"}}, createErr: errors.New("already exists")}
 	err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "demo") {
 		t.Fatalf("want an error naming the taken name, got %v", err)

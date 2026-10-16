@@ -12,7 +12,7 @@ func TestCreateOptionsArgs(t *testing.T) {
 	opts := msb.CreateOptions{
 		Image:       "ghcr.io/superradcompany/ubuntu-systemd:24.04",
 		Name:        "demo",
-		Labels:      map[string]string{"orcasm": "1", "orcasm.project": "/home/u/demo"},
+		Labels:      []string{"orcasm=1", "orcasm.folder=/home/u/demo"},
 		CPUs:        4,
 		MemoryGiB:   8,
 		RootDiskGiB: 32,
@@ -29,7 +29,7 @@ func TestCreateOptionsArgs(t *testing.T) {
 		"create", "ghcr.io/superradcompany/ubuntu-systemd:24.04", "--name", "demo", "--quiet",
 		"--init", "auto",
 		"--cpus", "4", "--memory", "8G", "--root-disk", "32G",
-		"--label", "orcasm=1", "--label", "orcasm.project=/home/u/demo",
+		"--label", "orcasm=1", "--label", "orcasm.folder=/home/u/demo",
 		"--mount-owned", "/var/lib/docker:kind=disk,size=100G",
 		"--port", "127.0.0.1:6769:6768",
 		"--shell", "/bin/bash",

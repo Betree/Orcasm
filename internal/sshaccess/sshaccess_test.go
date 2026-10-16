@@ -2,6 +2,7 @@ package sshaccess_test
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -221,6 +222,26 @@ func TestLinkUserConfigCreatesMissingConfig(t *testing.T) {
 	}
 	if info, _ := os.Stat(a.UserSSHDir); info.Mode().Perm() != 0o700 {
 		t.Errorf("new ~/.ssh mode = %v, want 0700", info.Mode().Perm())
+	}
+}
+
+func TestCommandReachesTheSandboxWithoutTheUserConfig(t *testing.T) {
+	a, _ := newAccess(t)
+	if err := a.Add("demo"); err != nil {
+		t.Fatal(err)
+	}
+
+	// -G makes ssh print the configuration it would use, without connecting.
+	argv := a.Command("demo", "-G")
+	out, err := exec.Command(argv[0], argv[1:]...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %v\n%s", argv, err, out)
+	}
+
+	for _, want := range []string{"user dev\n", "proxycommand msb ssh serve demo"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("ssh -G output lacks %q:\n%s", want, out)
+		}
 	}
 }
 

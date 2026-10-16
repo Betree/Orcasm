@@ -19,3 +19,14 @@ func AddSandboxRemote(ctx context.Context, hostRepo, sandbox, guestPath string) 
 	_, err := hostGit(ctx, hostRepo, "remote", "add", name, url)
 	return err
 }
+
+// RemoveSandboxRemote drops the remote AddSandboxRemote added, along with its
+// remote-tracking branches. Without such a remote it does nothing.
+func RemoveSandboxRemote(ctx context.Context, hostRepo, sandbox string) error {
+	name := SSHHost(sandbox)
+	if _, err := hostGit(ctx, hostRepo, "remote", "get-url", name); err != nil {
+		return nil
+	}
+	_, err := hostGit(ctx, hostRepo, "remote", "remove", name)
+	return err
+}

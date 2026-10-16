@@ -18,6 +18,9 @@ type BuildInfo struct {
 
 var subcommands []func(BuildInfo) *cobra.Command
 
+// bareRun is what `orcasm` without a subcommand does (set in bare.go).
+var bareRun func(*cobra.Command, []string) error
+
 // register adds a subcommand constructor. Call it from an init function in
 // the subcommand's own file.
 func register(newCmd func(BuildInfo) *cobra.Command) {
@@ -34,6 +37,7 @@ func NewRootCommand(info BuildInfo) *cobra.Command {
 		SilenceErrors: true,
 	}
 	root.SetVersionTemplate(fmt.Sprintf("orcasm %s (commit %s, built %s)\n", info.Version, info.Commit, info.Date))
+	root.RunE = bareRun
 	for _, newCmd := range subcommands {
 		root.AddCommand(newCmd(info))
 	}
