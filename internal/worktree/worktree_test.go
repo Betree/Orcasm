@@ -622,3 +622,44 @@ func TestArchiveWaitsForAnAgentStartingTheStack(t *testing.T) {
 		t.Errorf("order %v, want the agent's up before archive's down", order)
 	}
 }
+
+// Whoever starts the Stack may take longer than Orca lets the archive hook
+// run (a long image build): archive never tears down without the lock, it
+// leaves the teardown to a background `teardown` that waits for it.
+func TestArchiveLeavesASlowStartsTeardownToTheBackground(t *testing.T) {
+	f := newFixture(t)
+	f.upRuns = true
+	f.hooks.Poll = 5 * time.Millisecond
+	f.hooks.ArchiveWait = 30 * time.Millisecond
+	ctx := context.Background()
+	path := "/worktrees/shop/slow"
+	if err := f.hooks.Setup(ctx, path, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	dir := f.detached[0][0]
+	if err := f.hooks.Archive(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	if f.docker.called("down", "--volumes", "--remove-orphans") != nil {
+		t.Fatal("archive tore down without the Stack's lock")
+	}
+	if len(f.detached) != 2 || !slices.Equal(f.detached[1], []string{dir, "worktree", "teardown", path}) {
+		t.Fatalf("detached %v, want a background teardown", f.detached)
+	}
+	torn := make(chan error, 1)
+	go func() { torn <- f.hooks.Teardown(ctx, path) }()
+	time.Sleep(30 * time.Millisecond)
+	if f.docker.called("down", "--volumes", "--remove-orphans") != nil {
+		t.Fatal("teardown did not wait for the Stack's lock")
+	}
+	f.upEnds()
+	if err := <-torn; err != nil {
+		t.Fatal(err)
+	}
+	if f.docker.called("down", "--volumes", "--remove-orphans") == nil {
+		t.Error("teardown never tore down")
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("state dir still there: %v", err)
+	}
+}

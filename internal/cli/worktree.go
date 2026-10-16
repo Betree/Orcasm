@@ -51,6 +51,19 @@ func newWorktreeCmd(BuildInfo) *cobra.Command {
 				return h.Archive(cmd.Context(), path)
 			}),
 		&cobra.Command{
+			Use:    "teardown PATH",
+			Short:  "Tear down the Stack of the Worktree at PATH once nobody starts it (detached by archive)",
+			Args:   cobra.ExactArgs(1),
+			Hidden: true,
+			RunE: func(cmd *cobra.Command, args []string) error {
+				h, err := worktree.Guest()
+				if err != nil {
+					return err
+				}
+				return h.Teardown(cmd.Context(), args[0])
+			},
+		},
+		&cobra.Command{
 			Use:    "up DIR",
 			Short:  "Build and start the Stack saved in DIR (detached by setup)",
 			Args:   cobra.ExactArgs(1),

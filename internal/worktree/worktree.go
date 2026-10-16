@@ -83,6 +83,10 @@ type Hooks struct {
 	Detach func(dir string, inherit []*os.File, argv ...string) error
 	// Poll is how often Workbench checks on a starting Stack (0 = 500ms).
 	Poll time.Duration
+	// ArchiveWait bounds how long Archive waits for whoever starts the
+	// Stack before leaving the teardown to the background (0 = 90s, inside
+	// Orca's 2-minute hook timeout).
+	ArchiveWait time.Duration
 }
 
 // Guest are the hooks of the Sandbox's Project: the Config provisioning
@@ -215,14 +219,14 @@ func Up(ctx context.Context, docker stack.Docker, dir string) error {
 }
 
 // DetachSelf starts this binary with argv in its own session, so it
-// outlives the hook (and Orca's process-group kill on timeout), logging to
-// dir and inheriting the inherit files.
+// outlives the hook (and Orca's process-group kill on timeout), appending
+// to dir's log and inheriting the inherit files.
 func DetachSelf(dir string, inherit []*os.File, argv ...string) error {
 	self, err := os.Executable()
 	if err != nil {
 		return err
 	}
-	log, err := os.OpenFile(filepath.Join(dir, LogFile), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	log, err := os.OpenFile(filepath.Join(dir, LogFile), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
@@ -237,22 +241,46 @@ func DetachSelf(dir string, inherit []*os.File, argv ...string) error {
 	return c.Process.Release()
 }
 
-// Archive tears down the Stack of the Worktree checked out at path: it stops
-// a still running `up`, removes the Stack's containers, networks and
-// volumes, and forgets the Stack. It holds the Stack's lock while doing so,
-// so an agent starting the Stack finishes first rather than bringing it
-// back after the teardown. With one checkout per Worktree there are no
-// siblings to wait for (ADR 0005, #28).
+// Archive tears down the Stack of the Worktree checked out at path (see
+// Teardown). Whoever starts the Stack may outlast Orca's hook timeout (a
+// long image build): past ArchiveWait, the teardown is left to a
+// background `orcasm worktree teardown`, still waiting for the lock. With
+// one checkout per Worktree there are no siblings to wait for (ADR 0005,
+// #28).
 func (h Hooks) Archive(ctx context.Context, path string) error {
 	name, err := NameOf(path)
 	if err != nil {
 		return err
 	}
-	dir := h.StateDir(name)
-	wait, cancel := context.WithTimeout(ctx, archiveWait)
+	wait := h.ArchiveWait
+	if wait == 0 {
+		wait = 90 * time.Second
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
+	err = h.teardown(waitCtx, name)
+	if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+		return h.Detach(h.StateDir(name), nil, "worktree", "teardown", path)
+	}
+	return err
+}
+
+// Teardown stops a still running `up` of the Worktree checked out at path,
+// removes its Stack's containers, networks and volumes, and forgets the
+// Stack. It holds the Stack's lock while doing so, so whoever is starting
+// the Stack finishes first rather than bringing it back afterwards.
+func (h Hooks) Teardown(ctx context.Context, path string) error {
+	name, err := NameOf(path)
+	if err != nil {
+		return err
+	}
+	return h.teardown(ctx, name)
+}
+
+func (h Hooks) teardown(ctx context.Context, name string) error {
+	dir := h.StateDir(name)
 	stopped := false
-	lock, err := h.lock(wait, dir, func() error {
+	lock, err := h.lock(ctx, dir, func() error {
 		// Only a held lock means a live `up`: a pid file alone may be
 		// stale (Sandbox restart) and its pid another process's.
 		if !stopped {
@@ -261,14 +289,10 @@ func (h Hooks) Archive(ctx context.Context, path string) error {
 		}
 		return nil
 	})
-	switch {
-	case err == nil:
-		defer lock.Close()
-	case !errors.Is(err, context.DeadlineExceeded):
+	if err != nil {
 		return err
 	}
-	// Past archiveWait the Stack is torn down anyway, within Orca's hook
-	// timeout.
+	defer lock.Close()
 	st, err := Load(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		// Setup never ran (e.g. created with --setup skip): Compose finds
@@ -282,10 +306,6 @@ func (h Hooks) Archive(ctx context.Context, path string) error {
 	}
 	return os.RemoveAll(dir)
 }
-
-// archiveWait bounds how long Archive waits for whoever starts the Stack,
-// inside Orca's 2-minute hook timeout.
-const archiveWait = 90 * time.Second
 
 // stopUp ends the background `up` recorded in dir with the docker compose
 // it runs (same process group). Only call it while the Stack's lock is
