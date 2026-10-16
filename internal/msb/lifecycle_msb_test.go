@@ -58,7 +58,7 @@ func TestLifecycleWithRealMSB(t *testing.T) {
 	if got := status(t, c, name); got != msb.Stopped {
 		t.Errorf("after stop: status = %q", got)
 	}
-	if err := c.Start(ctx, name); err != nil {
+	if err := c.Start(ctx, name, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := status(t, c, name); got != msb.Running {

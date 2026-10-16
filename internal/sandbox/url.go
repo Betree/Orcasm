@@ -16,7 +16,7 @@ const webClientPrefix = "Web client URL: "
 // serve start mints a new pairing device and URL (docs/research/orca.md), so
 // earlier runs' lines are skipped. It fails while systemd or the unit is not
 // up yet.
-var orcaRunLog = `id=$(systemctl show -p InvocationID --value ` + OrcaUnit + `) && [ -n "$id" ] && ` +
+const orcaRunLog = `id=$(systemctl show -p InvocationID --value ` + OrcaUnit + `) && [ -n "$id" ] && ` +
 	`journalctl --no-pager -o cat _SYSTEMD_INVOCATION_ID="$id"`
 
 // URL returns the link that pairs a browser with the Sandbox's Orca web UI.

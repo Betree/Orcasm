@@ -88,8 +88,8 @@ func TestRemoveRefusesUnsavedWorkWithoutConfirmation(t *testing.T) {
 		Confirm: func(work []string) bool { asked = work; return false },
 	})
 
-	if err == nil || !strings.Contains(err.Error(), "uncommitted") {
-		t.Fatalf("err = %v, want refusal listing the uncommitted changes", err)
+	if err == nil {
+		t.Fatal("removed without confirmation")
 	}
 	if len(asked) != 1 || !strings.Contains(asked[0], main) {
 		t.Errorf("confirm asked about %q, want Main's changes", asked)

@@ -2,6 +2,7 @@ package sandbox_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"slices"
@@ -19,6 +20,8 @@ type fakeSandbox struct {
 	// orcaLog is what the current run of the Orca service has logged, as
 	// successive reads of the log see it (the last entry repeats).
 	orcaLog []string
+	// startEnv is the extra environment msb start last ran with.
+	startEnv []string
 }
 
 // fakeMSB is an in-memory msb. Exec only knows how to read Orca's service log.
@@ -73,7 +76,7 @@ func (f *fakeMSB) Labels(_ context.Context, name string) (map[string]string, err
 	return sb.labels, nil
 }
 
-func (f *fakeMSB) Start(_ context.Context, name string) error {
+func (f *fakeMSB) Start(_ context.Context, name string, env []string) error {
 	sb, err := f.get(name)
 	if err != nil {
 		return err
@@ -82,6 +85,7 @@ func (f *fakeMSB) Start(_ context.Context, name string) error {
 		return fmt.Errorf("cannot start sandbox '%s': already running", name)
 	}
 	sb.status = msb.Running
+	sb.startEnv = env
 	return nil
 }
 
@@ -179,6 +183,39 @@ func TestStartBootsAStoppedSandbox(t *testing.T) {
 
 	if f.sandboxes["app"].status != msb.Running {
 		t.Errorf("status = %s, want Running", f.sandboxes["app"].status)
+	}
+}
+
+func TestStartHandsMSBTheSandboxSecretEnv(t *testing.T) {
+	f := newFakeMSB()
+	f.add("app", msb.Stopped, "orcasm=1")
+	m := sandbox.Manager{MSB: f, StartEnv: func(_ context.Context, name string) ([]string, error) {
+		return []string{"ORCASM_SECRET_" + strings.ToUpper(name) + "=token"}, nil
+	}}
+
+	if err := m.Start(context.Background(), "app"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := f.sandboxes["app"].startEnv; !slices.Equal(got, []string{"ORCASM_SECRET_APP=token"}) {
+		t.Errorf("start env = %q", got)
+	}
+}
+
+func TestStartWithoutSecretValuesDoesNotStart(t *testing.T) {
+	f := newFakeMSB()
+	f.add("app", msb.Stopped, "orcasm=1")
+	m := sandbox.Manager{MSB: f, StartEnv: func(context.Context, string) ([]string, error) {
+		return nil, errors.New("no token for ANTHROPIC_API_KEY on this host")
+	}}
+
+	err := m.Start(context.Background(), "app")
+
+	if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+		t.Errorf("err = %v", err)
+	}
+	if f.sandboxes["app"].status != msb.Stopped {
+		t.Error("started without its secrets")
 	}
 }
 

@@ -34,7 +34,8 @@ func CreateLabels(folder, main string) []string {
 type MSB interface {
 	List(ctx context.Context, labels ...string) ([]msb.Listing, error)
 	Labels(ctx context.Context, name string) (map[string]string, error)
-	Start(ctx context.Context, name string) error
+	// Start boots a sandbox with env added to msb's environment.
+	Start(ctx context.Context, name string, env []string) error
 	Stop(ctx context.Context, name string, force bool) error
 	Remove(ctx context.Context, name string) error
 	Exec(ctx context.Context, name, user string, argv ...string) (string, error)
@@ -61,6 +62,10 @@ type Manager struct {
 	MSB MSB
 	// SSH is only needed to remove Sandboxes.
 	SSH SSHEntries
+	// StartEnv returns the "KEY=VALUE" host environment `msb start` needs for
+	// the named Sandbox: msb reads each secret's value from a host variable
+	// on every start, so the values must be supplied again. Nil means none.
+	StartEnv func(ctx context.Context, name string) ([]string, error)
 	// Poll is how often URL rereads Orca's log while waiting (default 1s).
 	Poll time.Duration
 }
@@ -96,7 +101,13 @@ func (m Manager) Start(ctx context.Context, name string) error {
 	if err != nil || s.Running() {
 		return err
 	}
-	return m.MSB.Start(ctx, name)
+	var env []string
+	if m.StartEnv != nil {
+		if env, err = m.StartEnv(ctx, name); err != nil {
+			return fmt.Errorf("secrets for %q: %w", name, err)
+		}
+	}
+	return m.MSB.Start(ctx, name, env)
 }
 
 // Stop shuts the named Sandbox down: gracefully, or at once with force.

@@ -29,7 +29,10 @@ func (m Manager) Remove(ctx context.Context, name string, opts RemoveOptions) er
 	}
 	if !opts.Force {
 		work := m.unsavedWork(ctx, s)
-		if len(work) > 0 && (opts.Confirm == nil || !opts.Confirm(work)) {
+		if len(work) > 0 && opts.Confirm != nil && !opts.Confirm(work) {
+			return fmt.Errorf("not removing %q", name)
+		}
+		if len(work) > 0 && opts.Confirm == nil {
 			return fmt.Errorf("not removing %q, it may hold unsaved work:\n  - %s\nfetch or push it first, or rerun with --force",
 				name, strings.Join(work, "\n  - "))
 		}

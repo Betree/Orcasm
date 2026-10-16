@@ -57,9 +57,11 @@ func (c CLI) Labels(ctx context.Context, name string) (map[string]string, error)
 	return inspect.Config.Labels, nil
 }
 
-// Start boots a stopped sandbox. msb refuses one that is already running.
-func (c CLI) Start(ctx context.Context, name string) error {
-	_, err := c.run(ctx, "start", "--quiet", name)
+// Start boots a stopped sandbox, with env ("KEY=VALUE") added to msb's
+// environment: msb reads secret values from host variables at each start.
+// msb refuses a sandbox that is already running.
+func (c CLI) Start(ctx context.Context, name string, env []string) error {
+	_, err := c.runEnv(ctx, env, "start", "--quiet", name)
 	return err
 }
 
@@ -91,9 +93,16 @@ func (c CLI) Exec(ctx context.Context, name, user string, argv ...string) (strin
 }
 
 func (c CLI) run(ctx context.Context, args ...string) (string, error) {
+	return c.runEnv(ctx, nil, args...)
+}
+
+func (c CLI) runEnv(ctx context.Context, env []string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "msb", args...)
 	if c.Home != "" {
-		cmd.Env = append(os.Environ(), "MSB_HOME="+c.Home)
+		env = append(env, "MSB_HOME="+c.Home)
+	}
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
