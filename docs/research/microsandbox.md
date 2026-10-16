@@ -4,7 +4,7 @@ Researched 2026-10-16 against `msb` 0.7.8 (installed) and repo `main` @ `c916e2d
 
 Sources: `msb <cmd> --help` output (0.7.8), the docs at <https://docs.microsandbox.dev> (source in the repo under `docs/`), and the repo itself. `github.com/microsandbox/microsandbox` redirects to **`github.com/superradcompany/microsandbox`** (Apache-2.0). Docs links below are written as `docs:/path`, which means `https://docs.microsandbox.dev/path`.
 
-Everything here comes from docs, help text or source. **Nothing was tested by creating a sandbox** (sandboxes were off-limits for this research). One extra data point: the user's existing sandbox `oc-dev` was inspected with the read-only `msb inspect` command. It is already close to the orcasm shape: image `ghcr.io/superradcompany/ubuntu-systemd:24.04`, 8 vCPU, 45 GiB RAM, 32 GiB managed ext4 root, a host bind at `/workspace`, an owned 100 GiB ext4 disk at `/var/lib/docker`, and custom labels.
+Everything here comes from docs, help text or source. **Nothing in §1–10 was tested by creating a sandbox** (sandboxes were off-limits for this research). §11 was tested in throwaway sandboxes. One extra data point: the user's existing sandbox `oc-dev` was inspected with the read-only `msb inspect` command. It is already close to the orcasm shape: image `ghcr.io/superradcompany/ubuntu-systemd:24.04`, 8 vCPU, 45 GiB RAM, 32 GiB managed ext4 root, a host bind at `/workspace`, an owned 100 GiB ext4 disk at `/var/lib/docker`, and custom labels.
 
 ---
 
@@ -171,20 +171,15 @@ Everything here comes from docs, help text or source. **Nothing was tested by cr
 - **cgroups:** not documented specifically. It works in the official guide and in `oc-dev`; the cgroup version and delegation details are unverified.
 - **Nested virtualization (KVM inside the sandbox):** not documented and assumed unavailable. Docker containers do not need it.
 - **Docker Compose:** not mentioned. It is just a client plugin, so it should work wherever dockerd works.
+- **Tested (#12):** Ubuntu 24.04's `docker.io` 29.1 with `docker-compose-v2` works on an owned disk at `/var/lib/docker`, but only with the containerd image store turned off. Docker 29 defaults to the containerd snapshotter, which keeps images under `/var/lib/containerd` on the overlay root, and `docker run` then fails with `overlay ... invalid argument`. Orcasm writes `{"features":{"containerd-snapshotter":false}}` to `/etc/docker/daemon.json`, so images use `overlay2` on the Docker disk.
 
 ## 9. SSH and exec
 
 - **Built-in SSH:** there is no sshd in the guest. msb speaks SSH on the host side and forwards shells, exec, SFTP and `-L`/`-D` forwarding into the guest (docs:/sandboxes/ssh).
   - `msb ssh NAME [-- cmd]` opens a native session with no keys needed.
   - `msb ssh authorize --file ~/.ssh/id_ed25519.pub` adds a key to `<MSB_HOME>/ssh/authorized_keys`. This is global, not per sandbox.
-  - `msb ssh serve NAME [--host 127.0.0.1 --port 2222]` runs a TCP listener, loopback by default. Log in as `root`.
-  - **Best fit for orcasm:** add to `~/.ssh/config`
-    ```
-    Host orca.msb
-      User root
-      ProxyCommand msb ssh serve NAME --stdio
-    ```
-    This also works for VS Code Remote-SSH, scp and rsync.
+  - `msb ssh serve NAME [--host 127.0.0.1 --port 2222]` runs a TCP listener, loopback by default. The SSH user name selects the guest user (root or any other; see §11).
+  - **Best fit for orcasm:** an `ssh_config` `Host` with `ProxyCommand msb ssh serve NAME --stdio`. The tested recipe, logging in as `dev`, is in §11. It works for VS Code Remote-SSH, scp, sftp and rsync.
   - Limitations:
     - No reverse forwarding (`-R`) and no stream-local forwarding.
     - Sessions disconnect after 10 minutes idle by default. Change this with `"ssh": {"inactivity_timeout_secs": 0}` in `~/.microsandbox/config.json` or with `--no-inactivity-timeout`.
@@ -206,6 +201,77 @@ Everything here comes from docs, help text or source. **Nothing was tested by cr
   - Public CLI and SDK compatibility is explicitly outside the internal `COMPATIBILITY.md` contract.
   - About 8.7k GitHub stars.
 - **Advice:** pin the `msb` version in orcasm and validate it with `msb --version`.
+
+## 11. SSH as the non-root `dev` user (spike #7, tested)
+
+Tested 2026-10-16 on this host with msb 0.7.8, `ubuntu-systemd:24.04`, `--init auto`, and VS Code 1.141.0 with Remote-SSH 0.128.0.
+
+**Answer: yes, msb SSH logs in as any existing guest user.** The SSH user name is the guest user. `ssh -o User=dev` runs as `uid=dev` with that user's supplementary groups (e.g. `docker`) and `HOME=/home/dev`. No switch on login, `su` wrapper or guest sshd is needed. An unknown user fails with `exec session error: guest user not found: <name>`.
+
+**Verified as `dev`:**
+- Commands, interactive PTY shells, sftp, scp and rsync (rsync must be installed in the guest). Files are created `dev:dev`.
+- `-L` and `-D` forwarding to a `dev`-owned listener on guest `127.0.0.1`.
+- **VS Code Remote-SSH, end to end.** VS Code runs `ssh -T -D <port> -F <cfg> <host> bash`, downloads its CLI and server into `/home/dev/.vscode-server`, and connects through the `-D` SOCKS tunnel. Every server process, including the extension host, ptyHost, file watcher and terminals, runs as uid `dev` with groups `dev,docker`. So editor saves and forwarded ports run as `dev` too. Nothing was written to `/root`.
+- **Public-key authentication is enforced** in `--stdio` mode. A key missing from msb's `authorized_keys` gets `Permission denied`.
+
+**What msb does not take from `/etc/passwd`:**
+- **Shell:** msb ignores the passwd shell. Commands and interactive sessions use the sandbox's `--shell`, which defaults to `/bin/sh`.
+- **Working directory:** sessions start in the sandbox's `--workdir` (default `/`), not in `$HOME`.
+- **Environment:** `USER`, `LOGNAME` and `SHELL` are not set.
+- Both `--shell` and `--workdir` apply to `msb exec` and to SSH, for all users. `--workdir` can be changed later with `msb modify -w`, but only with a restart (`--restart` or `--next-start`). `--shell` is create-time only.
+- **The workdir must exist at boot (tested in #12).** Otherwise `msb create` fails with `handoff init cwd not found`. `--mkdir <path>` creates it before boot.
+
+**Host keys:**
+- Each sandbox has its own host key in `~/.microsandbox/sandboxes/<name>/ssh/host_ed25519` (an msb-internal path). The key survives stop/start and is regenerated when the sandbox is removed and recreated under the same name.
+- `ssh-keygen -y -f <that file>` prints the public key, so orcasm can write `known_hosts` itself instead of relying on trust-on-first-use.
+
+**Authorization:**
+- **Scope:** `msb ssh authorize` is idempotent ("Already authorized"). It appends to the single, global `~/.microsandbox/ssh/authorized_keys`. A key in that file can log in to **every** sandbox of this `MSB_HOME`, as **any** user, root included. Logging in as `dev` is a convenience for file ownership, not a security boundary.
+- **Revocation:** there is no command to remove a key. Edit the file directly.
+
+**Inactivity timeout:**
+- With `--inactivity-timeout 15s` and no keepalive, an idle session (`sleep 30`) hung instead of returning; it was killed by `timeout` after 60 s.
+- With `ServerAliveInterval 5`, the same session survived. SSH keepalives count as traffic.
+- A VS Code session idle for longer than the 10-minute default would otherwise risk hanging, so the recipe below disables the timeout and sets keepalives anyway.
+
+### Recipe for #12 (provisioning)
+
+1. Create the sandbox with `--shell /bin/bash` and `--workdir <Main path>` (or set the workdir later with `msb modify -w`). This gives VS Code terminals and `ssh` a bash shell in Main.
+2. As root, run `useradd -m -s /bin/bash dev` and add `dev` to the groups it needs, e.g. `usermod -aG docker dev`. On `ubuntu-systemd:24.04`, uid 1000 is already taken by `ubuntu`, so `dev` gets 1001 unless orcasm picks the uid itself.
+3. Make the Main checkout and everything VS Code edits owned by `dev`.
+4. Install the packages that VS Code's server install and rsync need: `curl` or `wget`, `tar`, `ca-certificates`, `rsync`. The base image ships none of `curl`, `wget` or `python3`.
+
+### Recipe for #14 (ssh config)
+
+1. **Key:**
+   - Generate an orcasm-owned key once, e.g. `~/.orcasm/ssh/id_ed25519`.
+   - Run `msb ssh authorize --file <key>.pub`. It is safe to repeat.
+   - Never modify the user's other keys.
+2. **Known hosts:** write `~/.orcasm/ssh/known_hosts` from `ssh-keygen -y -f ~/.microsandbox/sandboxes/<name>/ssh/host_ed25519`. Prefix each line with the `Host` alias. Refresh the entry when a sandbox is recreated.
+3. **Config file:** write orcasm's own file, e.g. `~/.orcasm/ssh/config`, with one block per sandbox:
+   ```
+   Host orcasm-<name>
+     User dev
+     ProxyCommand msb ssh serve <name> --stdio --no-inactivity-timeout
+     IdentityFile ~/.orcasm/ssh/id_ed25519
+     IdentitiesOnly yes
+     UserKnownHostsFile ~/.orcasm/ssh/known_hosts
+     StrictHostKeyChecking yes
+     ServerAliveInterval 30
+   ```
+4. **Hook into the user's config:** add one `Include ~/.orcasm/ssh/config` line to `~/.ssh/config`, so VS Code Remote-SSH lists the hosts. Alternatively, point VS Code's `remote.SSH.configFile` setting at orcasm's file.
+5. **Root access:** keep root out of the `Host` entry. When root is needed, use `msb exec` (default user root) or `ssh -o User=root`.
+
+## 12. Lifecycle commands (issue #15, tested on 0.7.8)
+
+Tested on throwaway `spike15-*` sandboxes, removed afterwards.
+
+- **Labels:** a bare `msb ls --label orcasm` does **not** match `orcasm=1` (it matches the empty value only), so orcasm always selects `orcasm=1`. Values may hold slashes and spaces (`orcasm.folder=/home/x/my proj` is stored and matched exactly). `msb list --format json` gives `name`, `status` (`Running`/`Stopped`), `image`, `created_at`, but no labels; `msb inspect --format json` has them under `config.labels`, with the image's `org.opencontainers.*` labels mixed in. An unmatched selector prints `[]`.
+- **Changing labels:** `msb modify --label` works on a stopped sandbox; on a running one it refuses unless `--restart` or `--next-start` is given.
+- **start/stop:** `msb stop` on a stopped sandbox succeeds; `msb start` on a running one fails (`already running`). Stop and start of a small sandbox take well under a second. An enabled systemd unit (e.g. `orca.service`) comes back on start, but `systemctl` reports "Failed to connect to bus" for the first moments after `msb start` returns, so readers must retry.
+- **`msb exec` on a stopped sandbox succeeds**, in a transient boot **without systemd** (`systemctl` says "not booted with systemd"); the status stays `Stopped`. The persisted root filesystem is visible, so file and git reads work, but services do not.
+- **Without `--init auto`**, the ubuntu-systemd image does not run systemd as PID 1.
+- **Pairing URL of the current Orca run:** `systemctl show -p InvocationID --value orca` then `journalctl -o cat _SYSTEMD_INVOCATION_ID=<id>` prints only the current run's lines, so a restart's new `Web client URL:` replaces the old one.
 
 ---
 
