@@ -36,9 +36,12 @@ func TestProvisionARealSandbox(t *testing.T) {
 		Resources: wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
 		HostPort:  port,
 		Harnesses: []string{"claude", "codex", "opencode"},
+		Secrets:   []wizard.Secret{{Name: "ORCASM_TEST_TOKEN", Hosts: []string{"example.com"}}},
+		Git:       wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
 	}
+	value := func(wizard.Secret) (string, error) { return "not-a-real-token", nil }
 
-	if err := sandbox.Provision(ctx, msb.CLI{}, cfg, testWriter{t}); err != nil {
+	if err := sandbox.Provision(ctx, msb.CLI{}, cfg, value, testWriter{t}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -56,12 +59,13 @@ func TestProvisionARealSandbox(t *testing.T) {
 	checks := `pwd; stat -c %U "$PWD"; id -nG | tr ' ' '\n' | grep -x docker
 for c in git rsync curl gh claude codex opencode; do command -v $c >/dev/null || echo "missing $c"; done
 docker run --rm hello-world >/dev/null && echo docker-ok
-systemctl is-active orca; ps -o user= -C orca-ide | sort -u`
+systemctl is-active orca; ps -o user= -C orca-ide | sort -u
+git config user.name; echo "$ORCASM_TEST_TOKEN"`
 	out, err := sb.Exec(ctx, sandbox.User, "bash", "-lc", checks)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\nactive\ndev\n"
+	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\n"
 	if out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}

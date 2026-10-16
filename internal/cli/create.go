@@ -18,8 +18,8 @@ import (
 func init() { register(newCreateCmd) }
 
 // provision creates and provisions the Sandbox; tests swap it out.
-var provision = func(ctx context.Context, cfg wizard.Config, out io.Writer) error {
-	return sandbox.Provision(ctx, msb.CLI{}, cfg, out)
+var provision = func(ctx context.Context, cfg wizard.Config, secretValue sandbox.SecretValue, out io.Writer) error {
+	return sandbox.Provision(ctx, msb.CLI{}, cfg, secretValue, out)
 }
 
 func newCreateCmd(BuildInfo) *cobra.Command {
@@ -52,7 +52,11 @@ func newCreateCmd(BuildInfo) *cobra.Command {
 			if err := toml.NewEncoder(out).Encode(cfg); err != nil {
 				return err
 			}
-			if err := provision(cmd.Context(), cfg, out); err != nil {
+			if err := provision(cmd.Context(), cfg, host.SecretValue, out); err != nil {
+				return err
+			}
+			// Starting the Sandbox again needs its secret specs.
+			if err := sandbox.SaveConfig(filepath.Join(userConfig, "orcasm", "sandboxes"), cfg); err != nil {
 				return err
 			}
 			fmt.Fprintf(out, "Sandbox %s is ready. Orca's web UI is served on http://127.0.0.1:%d/\n", cfg.Name, cfg.HostPort)

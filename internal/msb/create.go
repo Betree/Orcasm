@@ -32,6 +32,18 @@ type CreateOptions struct {
 	Workdir string
 	// Mkdirs are created in the guest root filesystem before boot.
 	Mkdirs []string
+	// Secrets are substituted by msb's egress proxy; the guest only sees a
+	// placeholder in $Name.
+	Secrets []Secret
+}
+
+// Secret is an msb secret. Its Value reaches msb through the msb process's
+// environment (never argv). msb stores only the variable name, so every
+// later `msb start` needs the same variable set again.
+type Secret struct {
+	Name  string
+	Hosts []string
+	Value string
 }
 
 // OwnedDisk is an `--mount-owned PATH:kind=disk,size=NG` volume.
@@ -82,12 +94,33 @@ func (o CreateOptions) Args() []string {
 	if o.Workdir != "" {
 		args = append(args, "--workdir", o.Workdir)
 	}
+	for _, sec := range o.Secrets {
+		args = append(args, "--secret", sec.Name+"@"+strings.Join(sec.Hosts, ","))
+	}
 	return args
 }
 
 // Create creates and boots the sandbox (`msb create`).
 func (c CLI) Create(ctx context.Context, opts CreateOptions) error {
-	return c.stream(ctx, io.Discard, opts.Args()...)
+	var env []string
+	for _, sec := range opts.Secrets {
+		env = append(env, sec.Name+"="+sec.Value)
+	}
+	return c.stream(ctx, io.Discard, env, opts.Args()...)
+}
+
+// Names lists every sandbox name (`msb list --quiet`).
+func (c CLI) Names(ctx context.Context) ([]string, error) {
+	var out bytes.Buffer
+	if err := c.stream(ctx, &out, nil, "list", "--quiet"); err != nil {
+		return nil, err
+	}
+	return strings.Fields(out.String()), nil
+}
+
+// Remove force-removes the sandbox (`msb rm --force`).
+func (c CLI) Remove(ctx context.Context, name string) error {
+	return c.stream(ctx, io.Discard, nil, "rm", "--force", name)
 }
 
 // ExecTo runs argv in sandbox name as user ("" means root) with no stdin,
@@ -98,13 +131,17 @@ func (c CLI) ExecTo(ctx context.Context, name, user string, out io.Writer, argv 
 	if user != "" {
 		args = append(args, "--user", user)
 	}
-	return c.stream(ctx, out, append(append(args, name, "--"), argv...)...)
+	return c.stream(ctx, out, nil, append(append(args, name, "--"), argv...)...)
 }
 
-func (c CLI) stream(ctx context.Context, out io.Writer, args ...string) error {
+// stream runs msb with extra environment variables env, streaming stdout.
+func (c CLI) stream(ctx context.Context, out io.Writer, env []string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "msb", args...)
 	if c.Home != "" {
-		cmd.Env = append(os.Environ(), "MSB_HOME="+c.Home)
+		env = append(env, "MSB_HOME="+c.Home)
+	}
+	if len(env) > 0 {
+		cmd.Env = append(os.Environ(), env...)
 	}
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = out, &stderr

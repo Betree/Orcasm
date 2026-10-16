@@ -10,6 +10,7 @@ import (
 	"io"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 
 	"github.com/Betree/Orcasm/internal/msb"
@@ -42,6 +43,8 @@ const (
 // MSB is the slice of microsandbox Provision needs. msb.CLI implements it.
 type MSB interface {
 	Create(ctx context.Context, opts msb.CreateOptions) error
+	Remove(ctx context.Context, name string) error
+	Names(ctx context.Context) ([]string, error)
 	ExecTo(ctx context.Context, name, user string, out io.Writer, argv ...string) error
 }
 
@@ -55,11 +58,34 @@ func MainPath(folder string) string {
 	return path.Join("/home", User, filepath.Base(folder))
 }
 
+// SecretValue reads a Secret's value on the host (wizard.Host.SecretValue).
+type SecretValue func(wizard.Secret) (string, error)
+
 // Provision creates the Sandbox described by cfg and installs everything in
 // it, streaming progress to out. It returns once Orca's web UI answers on
 // the guest port; the host reaches it on 127.0.0.1:cfg.HostPort.
-func Provision(ctx context.Context, m MSB, cfg wizard.Config, out io.Writer) error {
+//
+// cfg.Secrets become msb secrets, valued through secretValue; every later
+// `msb start` of the Sandbox needs those values again.
+func Provision(ctx context.Context, m MSB, cfg wizard.Config, secretValue SecretValue, out io.Writer) error {
+	// Checked here, not just in the Wizard: a failed create is cleaned up
+	// with `msb rm`, which must never hit someone else's sandbox.
+	names, err := m.Names(ctx)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(names, cfg.Name) {
+		return fmt.Errorf("a sandbox named %s already exists", cfg.Name)
+	}
 	main := MainPath(cfg.Folder)
+	var secrets []msb.Secret
+	for _, s := range cfg.Secrets {
+		v, err := secretValue(s)
+		if err != nil {
+			return fmt.Errorf("secret %s: %w", s.Name, err)
+		}
+		secrets = append(secrets, msb.Secret{Name: s.Name, Hosts: s.Hosts, Value: v})
+	}
 	opts := msb.CreateOptions{
 		Image: Image,
 		Name:  cfg.Name,
@@ -78,15 +104,20 @@ func Provision(ctx context.Context, m MSB, cfg wizard.Config, out io.Writer) err
 		Shell:      "/bin/bash",
 		Workdir:    main,
 		Mkdirs:     []string{main},
+		Secrets:    secrets,
 	}
 	fmt.Fprintf(out, "==> Creating Sandbox %s\n", cfg.Name)
 	if err := m.Create(ctx, opts); err != nil {
+		// A failed create still leaves a stopped record holding the name.
+		_ = m.Remove(ctx, cfg.Name)
 		return fmt.Errorf("create Sandbox %s: %w", cfg.Name, err)
 	}
 	argv := append([]string{"bash", "-c", provisionScript, "provision",
-		User, strconv.Itoa(cfg.HostPort), OrcaVersion, main}, cfg.Harnesses...)
+		User, strconv.Itoa(cfg.HostPort), OrcaVersion, main, cfg.Git.Name, cfg.Git.Email},
+		cfg.Harnesses...)
 	if err := m.ExecTo(ctx, cfg.Name, "", out, argv...); err != nil {
-		return fmt.Errorf("provision Sandbox %s: %w", cfg.Name, err)
+		return fmt.Errorf("provision Sandbox %s (kept for inspection; `msb rm --force %s` to discard): %w",
+			cfg.Name, cfg.Name, err)
 	}
 	return nil
 }

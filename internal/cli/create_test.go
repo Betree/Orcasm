@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,13 +11,23 @@ import (
 	"testing"
 
 	"github.com/Betree/Orcasm/internal/cli"
+	"github.com/Betree/Orcasm/internal/sandbox"
 	"github.com/Betree/Orcasm/internal/wizard"
 )
+
+// TestMain makes sure no test boots a real Sandbox: tests running
+// `orcasm create` must call fakeProvision.
+func TestMain(m *testing.M) {
+	cli.SetProvision(func(context.Context, wizard.Config, sandbox.SecretValue, io.Writer) error {
+		return errors.New("test would provision a real Sandbox: call fakeProvision")
+	})
+	os.Exit(m.Run())
+}
 
 // fakeProvision records the Config `orcasm create` provisions.
 func fakeProvision(t *testing.T) *[]wizard.Config {
 	var got []wizard.Config
-	t.Cleanup(cli.SetProvision(func(_ context.Context, cfg wizard.Config, _ io.Writer) error {
+	t.Cleanup(cli.SetProvision(func(_ context.Context, cfg wizard.Config, _ sandbox.SecretValue, _ io.Writer) error {
 		got = append(got, cfg)
 		return nil
 	}))
@@ -24,7 +35,8 @@ func fakeProvision(t *testing.T) *[]wizard.Config {
 }
 
 func TestCreateProvisionsTheSandboxFromTheWizardConfig(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
 	provisioned := fakeProvision(t)
 	project := filepath.Join(t.TempDir(), "demo")
 	if err := os.Mkdir(project, 0o755); err != nil {
@@ -49,6 +61,10 @@ func TestCreateProvisionsTheSandboxFromTheWizardConfig(t *testing.T) {
 	}
 	if !strings.Contains(out, "http://127.0.0.1:16999/") {
 		t.Errorf("want the web UI address printed, got:\n%s", out)
+	}
+	kept, err := sandbox.LoadConfig(filepath.Join(xdg, "orcasm", "sandboxes"), "orcasm-cli-test-sandbox")
+	if err != nil || kept.HostPort != 16999 {
+		t.Errorf("want the Sandbox's Config kept for later starts, got %+v, %v", kept, err)
 	}
 }
 
@@ -80,6 +96,7 @@ func TestCreateWithAnswersFileRunsTheWizardWithoutPrompting(t *testing.T) {
 func TestCreatePrintsApprovedSecretsAsSpecsWithoutTheirValues(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-fake-value")
+	fakeProvision(t)
 	project := filepath.Join(t.TempDir(), "demo")
 	if err := os.Mkdir(project, 0o755); err != nil {
 		t.Fatal(err)

@@ -1,9 +1,10 @@
 # Provisions a fresh ubuntu-systemd:24.04 Sandbox. Runs as root via
-# `msb exec ... bash -c <this> provision <user> <hostport> <orca-version> <main> [harness...]`.
+# `msb exec ... bash -c <this> provision <user> <hostport> <orca-version> <main> \
+#   <git-name> <git-email> [harness...]` (empty git name: no identity shared).
 # Every step is safe to re-run.
 set -euo pipefail
-user=$1 hostport=$2 orca_version=$3 main=$4
-shift 4
+user=$1 hostport=$2 orca_version=$3 main=$4 git_name=$5 git_email=$6
+shift 6
 harnesses=("$@")
 export DEBIAN_FRONTEND=noninteractive
 step() { echo "==> $*"; }
@@ -33,6 +34,10 @@ usermod -aG docker "$user"
 chown -R "$user:$user" "/home/$user"
 mkdir -p "$main"
 chown "$user:$user" "$main"
+if [ -n "$git_name" ]; then
+  runuser -u "$user" -- git config --global user.name "$git_name"
+  runuser -u "$user" -- git config --global user.email "$git_email"
+fi
 
 step "Starting Docker"
 # Docker 29 defaults to the containerd image store under /var/lib/containerd,

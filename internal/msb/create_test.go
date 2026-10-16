@@ -2,6 +2,7 @@ package msb_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Betree/Orcasm/internal/msb"
@@ -20,6 +21,9 @@ func TestCreateOptionsArgs(t *testing.T) {
 		Shell:       "/bin/bash",
 		Workdir:     "/home/dev/demo",
 		Mkdirs:      []string{"/home/dev/demo"},
+		Secrets: []msb.Secret{
+			{Name: "GH_TOKEN", Hosts: []string{"github.com", "api.github.com"}, Value: "ghp_real"},
+		},
 	}
 	want := []string{
 		"create", "ghcr.io/superradcompany/ubuntu-systemd:24.04", "--name", "demo", "--quiet",
@@ -31,8 +35,14 @@ func TestCreateOptionsArgs(t *testing.T) {
 		"--shell", "/bin/bash",
 		"--mkdir", "/home/dev/demo",
 		"--workdir", "/home/dev/demo",
+		"--secret", "GH_TOKEN@github.com,api.github.com",
 	}
 	if got := opts.Args(); !reflect.DeepEqual(got, want) {
 		t.Errorf("got  %q\nwant %q", got, want)
+	}
+	for _, a := range opts.Args() {
+		if strings.Contains(a, "ghp_real") {
+			t.Errorf("secret value leaked into argv: %q", a)
+		}
 	}
 }
