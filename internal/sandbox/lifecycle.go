@@ -67,6 +67,8 @@ type Manager struct {
 	SSH SSHEntries
 	// Labels is only needed to migrate Sandboxes (it records LabelSchema).
 	Labels LabelSetter
+	// Installer is only needed to upgrade Sandboxes: it installs in them.
+	Installer GuestMSB
 	// StartSecrets returns the named Sandbox's secrets with their values:
 	// msb reads each secret's value from the host on every start, so the
 	// values must be supplied again. Nil means none.
