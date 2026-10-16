@@ -84,3 +84,29 @@ func TestListWithUnmatchedLabelIsEmpty(t *testing.T) {
 		t.Errorf("list = %+v, want empty", list)
 	}
 }
+
+func TestSetLabelsChangesOneLabelOnARunningSandboxAndKeepsTheRest(t *testing.T) {
+	name := testSandbox(t)
+	ctx := context.Background()
+	c := msb.CLI{}
+	if status(t, c, name) != msb.Running {
+		if err := c.Start(ctx, name, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, v := range []string{"1", "2"} {
+		if err := c.SetLabels(ctx, name, msb.Label{Key: "orcasm-test.schema", Value: v}); err != nil {
+			t.Fatal(err)
+		}
+		labels, err := c.Labels(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if labels["orcasm-test.schema"] != v || labels["orcasm-test"] != "1" {
+			t.Errorf("labels = %v, want orcasm-test.schema=%s next to orcasm-test=1", labels, v)
+		}
+	}
+	if got := status(t, c, name); got != msb.Running {
+		t.Errorf("setting a label left the sandbox %q, want it still running", got)
+	}
+}

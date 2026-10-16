@@ -28,6 +28,8 @@ type fakeSandbox struct {
 type fakeMSB struct {
 	sandboxes map[string]*fakeSandbox
 	removed   []string
+	// labelWrites are the labels SetLabels wrote, in order.
+	labelWrites []string
 }
 
 func newFakeMSB() *fakeMSB { return &fakeMSB{sandboxes: map[string]*fakeSandbox{}} }
@@ -73,6 +75,19 @@ func (f *fakeMSB) Labels(_ context.Context, name string) (map[string]string, err
 		return nil, err
 	}
 	return sb.labels, nil
+}
+
+// SetLabels records each write in labelWrites ("name key=value").
+func (f *fakeMSB) SetLabels(_ context.Context, name string, labels ...msb.Label) error {
+	sb, err := f.get(name)
+	if err != nil {
+		return err
+	}
+	for _, l := range labels {
+		sb.labels[l.Key] = l.Value
+		f.labelWrites = append(f.labelWrites, name+" "+l.String())
+	}
+	return nil
 }
 
 func (f *fakeMSB) Start(_ context.Context, name string, secrets []msb.Secret) error {

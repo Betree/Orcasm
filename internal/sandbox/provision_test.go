@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,6 +94,21 @@ func TestProvisionCreatesTheSandboxFromTheWizardConfig(t *testing.T) {
 	}
 	if len(f.created) != 1 || !reflect.DeepEqual(f.created[0], want) {
 		t.Errorf("created %+v\nwant %+v", f.created, want)
+	}
+}
+
+func TestANewSandboxStartsWithEveryMigrationApplied(t *testing.T) {
+	r := &recorder{}
+	defer sandbox.SetMigrations([]sandbox.Migration{r.migration(1, "1"), r.migration(2, "2")})()
+	f := &fakeCreateMSB{}
+	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.created) != 1 || !slices.Contains(f.created[0].Labels, msb.Label{Key: "orcasm.schema", Value: "2"}) {
+		t.Errorf("created %+v, want the label orcasm.schema=2", f.created)
+	}
+	if len(r.ran) != 0 {
+		t.Errorf("ran migrations %q on a new Sandbox", r.ran)
 	}
 }
 
