@@ -102,13 +102,12 @@ func parseMajorMinor(v string) (major, minor int, ok bool) {
 }
 
 func checkMsb(h Host) Check {
-	install := fmt.Sprintf("install msb %s with: curl -fsSL https://install.microsandbox.dev | sh", msb.PinnedVersion)
+	install := msb.InstallHint
 	out, err := h.MsbVersion()
 	if err != nil {
 		return fail("msb", fmt.Sprintf("msb not found (%v); %s", err, install))
 	}
-	// `msb --version` prints "msb 0.7.8".
-	v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(out), "msb"))
+	v := msb.ParseVersion(out)
 	if v != msb.PinnedVersion {
 		return fail("msb", fmt.Sprintf("found msb %s, orcasm needs msb %s; %s", v, msb.PinnedVersion, install))
 	}
