@@ -11,11 +11,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Betree/Orcasm/internal/orca"
 	"github.com/Betree/Orcasm/internal/stack"
@@ -82,6 +84,8 @@ type Hooks struct {
 	// Detach starts argv (an orcasm subcommand) in the background, out of
 	// the hook's process group, logging into dir.
 	Detach func(dir string, argv ...string) error
+	// Poll is how often Workbench checks on a starting Stack (0 = 500ms).
+	Poll time.Duration
 }
 
 // Name is the Worktree checked out at path: Orca's worktree directory name.
@@ -196,4 +200,124 @@ func stopUp(dir string) {
 		return
 	}
 	_ = syscall.Kill(-pid, syscall.SIGTERM)
+}
+
+// Workbench waits until the Stack of the Worktree holding dir is up and
+// returns its Workbench's container id, ready for the agent wrapper to run
+// an agent in as the calling user. While a background `up` runs, its log
+// goes to progress; a Stack found stopped (e.g. after a Sandbox restart) is
+// started again.
+func (h Hooks) Workbench(ctx context.Context, dir string, progress io.Writer) (string, error) {
+	name, ok := worktreeOf(dir)
+	if !ok {
+		return "", fmt.Errorf("%s is in no Worktree (under %s)", dir, BasePath)
+	}
+	state := h.StateDir(name)
+	st, err := Load(state)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", fmt.Errorf("Worktree %s has no Stack: Orca's setup hook did not run for it", name)
+	} else if err != nil {
+		return "", err
+	}
+	if err := h.follow(ctx, name, state, progress); err != nil {
+		return "", err
+	}
+	id, err := h.runningWorkbench(ctx, st)
+	if err != nil {
+		return "", err
+	}
+	if id == "" {
+		fmt.Fprintf(progress, "orcasm: Starting the Stack of %s...\n", name)
+		if err := st.Up(ctx, h.Docker); err != nil {
+			return "", fmt.Errorf("starting the Stack of %s: %w", name, err)
+		}
+		if id, err = h.runningWorkbench(ctx, st); err != nil {
+			return "", err
+		}
+		if id == "" {
+			return "", fmt.Errorf("the Workbench (%s) of %s is not running: see docker compose -p %s logs %s",
+				st.Workbench, name, st.Project, st.Workbench)
+		}
+	}
+	// docker exec -u <uid> -e HOME=<home>: the home must exist in the
+	// Workbench and be the user's. Only its shared subdirs are mounted, so
+	// Docker created the home and the dirs leading to them (~/.cache,
+	// ~/.local...) as root; hand those to the user, not the mounts (-xdev).
+	owner := strconv.Itoa(os.Getuid()) + ":" + strconv.Itoa(os.Getgid())
+	if _, err := h.Docker(ctx, "exec", "-u", "0", id, "sh", "-c",
+		`mkdir -p "$1" && find "$1" -xdev -type d -user 0 -exec chown "$2" {} +`,
+		"sh", h.Config.Home, owner); err != nil {
+		return "", fmt.Errorf("preparing %s in the Workbench: %w", h.Config.Home, err)
+	}
+	return id, nil
+}
+
+// worktreeOf is the Worktree holding dir: BasePath/<repo>/<worktree>/...
+func worktreeOf(dir string) (string, bool) {
+	rel, err := filepath.Rel(BasePath, filepath.Clean(dir))
+	if err != nil {
+		return "", false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) < 2 || parts[0] == ".." || parts[0] == "." {
+		return "", false
+	}
+	return parts[1], true
+}
+
+func (h Hooks) runningWorkbench(ctx context.Context, st stack.Stack) (string, error) {
+	out, err := h.Docker(ctx, st.Command("ps", "--quiet", "--status", "running", st.Workbench)...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// follow copies the background `up`'s log to progress until it ends; it
+// returns at once if none runs.
+func (h Hooks) follow(ctx context.Context, name, state string, progress io.Writer) error {
+	if !upRunning(state) {
+		return nil
+	}
+	poll := h.Poll
+	if poll == 0 {
+		poll = 500 * time.Millisecond
+	}
+	fmt.Fprintf(progress, "orcasm: waiting for the Stack of %s to start...\n", name)
+	var off int64
+	copyNew := func() {
+		f, err := os.Open(filepath.Join(state, LogFile))
+		if err != nil {
+			return
+		}
+		defer f.Close()
+		if _, err := f.Seek(off, io.SeekStart); err == nil {
+			n, _ := io.Copy(progress, f)
+			off += n
+		}
+	}
+	for upRunning(state) {
+		copyNew()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(poll):
+		}
+	}
+	copyNew()
+	return nil
+}
+
+// upRunning reports whether the background `up` recorded in dir is alive.
+func upRunning(dir string) bool {
+	raw, err := os.ReadFile(filepath.Join(dir, pidFile))
+	if err != nil {
+		return false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || pid <= 1 {
+		return false
+	}
+	err = syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }

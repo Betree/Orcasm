@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Betree/Orcasm/internal/sandbox"
@@ -96,5 +97,31 @@ func TestInstallOrcasmPutsTheBinaryAndTheWorktreeConfigInTheSandbox(t *testing.T
 	}
 	if fi, err := os.Stat(filepath.Join(g.root, sandbox.WorktreesDir)); err != nil || !fi.IsDir() {
 		t.Errorf("%s: %v", sandbox.WorktreesDir, err)
+	}
+}
+
+func installed(t *testing.T, cfg wizard.Config) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "orcasm-linux")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	g := &guestMSB{t: t, root: t.TempDir(), copied: map[string]string{}}
+	if err := sandbox.InstallOrcasm(context.Background(), g, cfg, bin, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	return g.root
+}
+
+func TestTheHookRelayRunsAsASystemdUnitOfTheSandboxUser(t *testing.T) {
+	root := installed(t, demoConfig())
+	raw, err := os.ReadFile(filepath.Join(root, "etc/systemd/system", sandbox.HookRelayUnit+".service"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"User=dev", "ExecStart=/usr/local/bin/orcasm worktree hook-relay", "Restart=always", "After=docker.service", "WantedBy=multi-user.target"} {
+		if !strings.Contains(string(raw), want) {
+			t.Errorf("unit lacks %q:\n%s", want, raw)
+		}
 	}
 }

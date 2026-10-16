@@ -10,7 +10,9 @@ export DEBIAN_FRONTEND=noninteractive
 step() { echo "==> $*"; }
 
 step "Installing base packages, Docker and gh"
-apt-get update -qq
+# Right after boot apt-get update sometimes fails with "Unknown error
+# executing apt-key"; a retry moments later works.
+apt-get update -qq || { sleep 5; apt-get update -qq; }
 apt-get install -y -qq --no-install-recommends >/dev/null \
   ca-certificates curl wget tar git rsync less \
   docker.io docker-compose-v2 gh \
@@ -52,6 +54,10 @@ usermod -aG docker "$user"
 chown -R "$user:$user" "/home/$user"
 mkdir -p "$main"
 chown "$user:$user" "$main"
+# The XDG location, which `git config --global` then writes to: Workbenches
+# mount ~/.config/git, so agents there commit with the same identity.
+runuser -u "$user" -- mkdir -p "/home/$user/.config/git"
+runuser -u "$user" -- touch "/home/$user/.config/git/config"
 if [ -n "$git_name" ]; then
   runuser -u "$user" -- git config --global user.name "$git_name"
   runuser -u "$user" -- git config --global user.email "$git_email"
@@ -75,6 +81,10 @@ if [ "$(dpkg-query -W -f='${Version}' orca-ide 2>/dev/null || true)" != "$orca_v
   rm -f "$deb"
 fi
 
+# Harnesses go in the harness layer, which Workbenches mount read-only at the
+# same path; /usr/local/bin/<harness> becomes orcasm's agent wrapper
+# (installed with orcasm itself), which runs them on Main or in a Workbench.
+harness_layer=/opt/orcasm/harness
 for h in "${harnesses[@]}"; do
   case $h in
     claude) pkg=@anthropic-ai/claude-code ;;
@@ -83,8 +93,13 @@ for h in "${harnesses[@]}"; do
     *) echo "unknown harness: $h" >&2; exit 1 ;;
   esac
   step "Installing harness $h ($pkg)"
-  NODE_EXTRA_CA_CERTS=$ca_bundle npm install -g --no-fund --no-audit --loglevel=error "$pkg@latest"
+  NODE_EXTRA_CA_CERTS=$ca_bundle npm install -g --prefix "$harness_layer" --no-fund --no-audit --loglevel=error "$pkg@latest"
 done
+
+# Claude keeps its global config (~/.claude.json, replaced by rename) in
+# ~/.claude instead, a directory Workbenches can mount and see updates in.
+claude_dir=/home/$user/.claude
+grep -q "^CLAUDE_CONFIG_DIR=" /etc/environment || echo "CLAUDE_CONFIG_DIR=$claude_dir" >>/etc/environment
 
 step "Starting Orca"
 # One serve start = one new pairing device and a new Web client URL
@@ -102,6 +117,7 @@ WorkingDirectory=/home/$user
 Environment=ORCA_SERVE_RUNTIME=electron
 Environment=PATH=/home/$user/.local/bin:/usr/local/bin:/usr/bin:/bin
 Environment=NODE_EXTRA_CA_CERTS=$ca_bundle SSL_CERT_FILE=$ca_bundle CURL_CA_BUNDLE=$ca_bundle REQUESTS_CA_BUNDLE=$ca_bundle
+Environment=CLAUDE_CONFIG_DIR=$claude_dir
 ExecStart=/usr/bin/orca-ide serve --port 6768 --pairing-address 127.0.0.1:$hostport
 Restart=on-failure
 RestartSec=10

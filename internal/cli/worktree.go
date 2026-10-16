@@ -14,6 +14,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/Betree/Orcasm/internal/hookrelay"
 	"github.com/Betree/Orcasm/internal/orca"
 	"github.com/Betree/Orcasm/internal/stack"
 	"github.com/Betree/Orcasm/internal/worktree"
@@ -74,6 +75,39 @@ func newWorktreeCmd(BuildInfo) *cobra.Command {
 					fmt.Fprintln(cmd.OutOrStdout(), "orcasm: the Stack is up")
 				}
 				return err
+			},
+		},
+		&cobra.Command{
+			Use:   "workbench DIR",
+			Short: "Wait for the Stack of the Worktree holding DIR and print its Workbench container (agent wrapper)",
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				h, err := guestHooks()
+				if err != nil {
+					return err
+				}
+				id, err := h.Workbench(cmd.Context(), args[0], cmd.ErrOrStderr())
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(cmd.OutOrStdout(), id)
+				return nil
+			},
+		},
+		&cobra.Command{
+			Use:   "hook-relay",
+			Short: "Relay Orca's agent hook port from Docker's bridge to Orca (systemd unit)",
+			Args:  cobra.NoArgs,
+			RunE: func(cmd *cobra.Command, _ []string) error {
+				rt, err := orca.DefaultRuntime()
+				if err != nil {
+					return err
+				}
+				return hookrelay.Relay{
+					Endpoint: rt.HookEndpointFile(),
+					Bridge:   hookrelay.DockerBridge,
+					Log:      cmd.ErrOrStderr(),
+				}.Run(cmd.Context())
 			},
 		},
 		&cobra.Command{
