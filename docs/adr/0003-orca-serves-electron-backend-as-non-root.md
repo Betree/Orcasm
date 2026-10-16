@@ -1,0 +1,3 @@
+# Orca runs in the Sandbox as `orca-ide serve` with the Electron backend, as a non-root user
+
+As of Orca v1.4.227, the default `orcad` serve backend is broken in the Linux package and, even when run by hand, does not serve the web client. Only `ORCA_SERVE_RUNTIME=electron` serves `web-index.html` (it starts its own Xvfb), and Electron refuses to run as root without `--no-sandbox`. Orcasm therefore sets the backend explicitly (so an upstream fix to `orcad` cannot silently switch to a backend without a web client) and runs Orca under a dedicated non-root user. Verified in a spike, see `docs/research/orca.md`.
