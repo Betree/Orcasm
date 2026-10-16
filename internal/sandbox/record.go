@@ -59,6 +59,10 @@ func RemoveConfig(dir, name string) error {
 type Installed struct {
 	// Orca is the Orca release (orca-ide package version).
 	Orca string `toml:"orca"`
+	// Orcasm is the version of the orcasm installed in it, which also
+	// generates its Workbench layer (internal/stack): that of the host
+	// orcasm that installed it, whose binary it is on Linux hosts.
+	Orcasm string `toml:"orcasm,omitempty"`
 }
 
 func installedPath(dir, name string) string { return filepath.Join(dir, name+".installed.toml") }

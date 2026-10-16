@@ -63,6 +63,24 @@ var Layer = func() string {
 	return layerRevision + "-" + hex.EncodeToString(sum[:6])
 }()
 
+// AgentProcesses is an extended regular expression, for `pgrep -f` and Go's
+// regexp alike, matching the command line of an agent process of the given
+// harnesses: its wrapper /usr/local/bin/<harness> (a bash script, which
+// stays in the foreground for agents in Workbenches) or the harness itself,
+// which runs from HarnessLayer on Main and in Workbenches. Orca's own
+// terminals do not match.
+func AgentProcesses(harnesses []string) string {
+	layer := regexp.QuoteMeta(HarnessLayer + "/")
+	if len(harnesses) == 0 {
+		return layer
+	}
+	alts := make([]string, len(harnesses))
+	for i, h := range harnesses {
+		alts[i] = regexp.QuoteMeta(h)
+	}
+	return `(^|/bin/bash )/usr/local/bin/(` + strings.Join(alts, "|") + `)( |$)|` + layer
+}
+
 // share is a directory of the Sandbox user's home given to the Workbench;
 // paths are relative to the home directory.
 type share struct {

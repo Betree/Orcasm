@@ -60,10 +60,10 @@ func (w *world) creator(t *testing.T) sandbox.Creator {
 			w.steps = append(w.steps, "set Orca hooks of "+guestPath+" in "+name)
 			return nil
 		},
-		ConfigDir:   w.configDir,
-		OrcaVersion: "1.4.230",
-		OrcaWait:    time.Second,
-		Poll:        time.Millisecond,
+		ConfigDir: w.configDir,
+		Installs:  sandbox.Installed{Orca: "1.4.230", Orcasm: "0.3.0"},
+		OrcaWait:  time.Second,
+		Poll:      time.Millisecond,
 	}
 }
 
@@ -119,14 +119,14 @@ func TestCreateSetsUpTheWholeSandboxInOrder(t *testing.T) {
 }
 
 // The daily upgrade notice compares it without booting the Sandbox.
-func TestCreateRecordsTheOrcaReleaseItInstalledOnTheHost(t *testing.T) {
+func TestCreateRecordsTheOrcaAndOrcasmItInstalledOnTheHost(t *testing.T) {
 	w := &world{}
 	if err := w.creator(t).Create(context.Background(), createConfig(), io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	got, err := sandbox.LoadInstalled(w.configDir, "demo")
-	if err != nil || got.Orca != "1.4.230" {
-		t.Errorf("installed = %+v, %v; want Orca 1.4.230", got, err)
+	if want := (sandbox.Installed{Orca: "1.4.230", Orcasm: "0.3.0"}); err != nil || got != want {
+		t.Errorf("installed = %+v, %v; want %+v", got, err, want)
 	}
 }
 

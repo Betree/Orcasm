@@ -10,17 +10,18 @@ import (
 	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/stack"
 	"github.com/Betree/Orcasm/internal/version"
+	"github.com/Betree/Orcasm/internal/wizard"
 )
 
 // UpgradeOptions are what Upgrade reconciles the Sandbox with.
 type UpgradeOptions struct {
-	// Orca is the desired Orca release (OrcaSource.Desired) and OrcaFrom
-	// where it comes from, for the progress lines.
-	Orca, OrcaFrom string
-	// GuestBinary is the orcasm to install in the Sandbox (GuestBinary).
-	GuestBinary string
+	// Orca is the desired Orca release (OrcaSource.Desired).
+	Orca OrcaTarget
+	// GuestBinary is the orcasm to install in the Sandbox (GuestBinary),
+	// and Orcasm its version (the host's BuildInfo.Version), recorded.
+	GuestBinary, Orcasm string
 	// Confirm asks question and reports whether to go ahead; nil means no.
-	// It is asked before restarting Orca under running agents.
+	// It is asked before what can end running agents' sessions.
 	Confirm func(question string) bool
 }
 
@@ -44,12 +45,10 @@ var upgradeHarnesses = orcaFunctions + `set -euo pipefail
 install_harnesses "$@"
 `
 
-// agentProcesses counts the Sandbox user's agent processes: the wrappers
-// (/usr/local/bin/<harness>, which stay in the foreground for agents in
-// Workbenches) and the harnesses themselves, on Main or in a Workbench
-// (whose processes the Sandbox sees). Orca's own terminals do not count.
-var agentProcesses = `pgrep -c -u ` + guest.User + ` -f '(^|/bin/bash )/usr/local/bin/(claude|codex|opencode)( |$)|` +
-	stack.HarnessLayer + `/' || true`
+// agentProcesses counts the Sandbox user's agent processes of any harness
+// orcasm supports, on Main or in a Workbench (whose processes the Sandbox
+// sees).
+var agentProcesses = `pgrep -c -u ` + guest.User + ` -f '` + stack.AgentProcesses(wizard.SupportedHarnesses) + `' || true`
 
 // Upgrade brings the named Sandbox up to this orcasm in place (ADR 0006):
 // first its pending migrations, then version reconciliation. A stopped
@@ -58,12 +57,14 @@ var agentProcesses = `pgrep -c -u ` + guest.User + ` -f '(^|/bin/bash )/usr/loca
 //
 // Reconciliation reinstalls orcasm's own layer in the Sandbox (orcasm, its
 // config, the agent wrappers, the stack command, the proxy), all
-// idempotent, then updates the harnesses to their latest releases unless
-// agents run, then installs opts.Orca if the installed Orca is older,
-// asking opts.Confirm first if agents run, since the restart can end their
-// sessions. It never downgrades Orca. Workbenches are left alone: each picks
-// up this orcasm's Workbench layer at its next agent launch, when idle
-// (internal/worktree).
+// idempotent and harmless to running agents. Then it updates the harnesses
+// to their latest releases (they float, ADR 0006) and installs opts.Orca if
+// the installed Orca is older, restarting it. Both can end the sessions of
+// running agents (a harness's files replaced under it, Orca's terminals
+// restarted), so while agents run it asks opts.Confirm once for both, and
+// does neither without consent. It never downgrades Orca. Workbenches are
+// left alone: each picks up this orcasm's Workbench layer at its next agent
+// launch, when idle (internal/worktree).
 func (m Manager) Upgrade(ctx context.Context, name string, opts UpgradeOptions, out io.Writer) (UpgradeResult, error) {
 	var res UpgradeResult
 	s, err := m.Get(ctx, name)
@@ -87,67 +88,99 @@ func (m Manager) Upgrade(ctx context.Context, name string, opts UpgradeOptions, 
 	if err != nil {
 		return res, err
 	}
-	agents, err := m.runningAgents(ctx, name)
-	if err != nil {
+	if err := m.reinstallOrcasmLayer(ctx, cfg, opts.GuestBinary, out); err != nil {
 		return res, err
 	}
 
-	fmt.Fprintln(out, "==> Reinstalling orcasm's layer in the Sandbox")
-	stackArgv, err := stackInstallArgv(MainPath(cfg.ProjectPath), cfg.Project.ComposeFiles)
-	if err != nil {
-		return res, err
+	orcaBehind := m.reportOrca(installed, opts.Orca, out)
+	harnesses := len(cfg.Harnesses) > 0
+	if orcaBehind || harnesses {
+		ok, err := m.mayInterruptAgents(ctx, name, orcaBehind, harnesses, opts, out)
+		if err != nil {
+			return res, err
+		}
+		if !ok {
+			harnesses, orcaBehind = false, false
+		}
 	}
-	if err := m.Installer.ExecStreaming(ctx, name, "", out, agentsInstallArgv(cfg.Harnesses)...); err != nil {
-		return res, fmt.Errorf("install the agent wrappers in %s: %w", name, err)
-	}
-	if err := InstallOrcasm(ctx, m.Installer, cfg, opts.GuestBinary, out); err != nil {
-		return res, fmt.Errorf("install orcasm in %s: %w", name, err)
-	}
-	if err := m.Installer.ExecStreaming(ctx, name, "", out, stackArgv...); err != nil {
-		return res, fmt.Errorf("install the stack command in %s: %w", name, err)
-	}
-	if err := m.Installer.ExecStreaming(ctx, name, "", out, proxyArgv()...); err != nil {
-		return res, fmt.Errorf("restart the Worktree proxy in %s: %w", name, err)
-	}
-	fmt.Fprintln(out, "Workbenches take the new Workbench layer at their next agent launch, once idle.")
-
-	switch {
-	case len(cfg.Harnesses) == 0:
-	case agents > 0:
-		fmt.Fprintf(out, "Harnesses: skipped while agents run in %s; rerun `orcasm upgrade %s` once they are done.\n", name, name)
-	default:
+	if harnesses {
 		argv := append([]string{"bash", "-c", upgradeHarnesses, "upgrade-harnesses"}, cfg.Harnesses...)
 		if err := m.Installer.ExecStreaming(ctx, name, "", out, argv...); err != nil {
 			return res, fmt.Errorf("upgrade the harnesses of %s: %w", name, err)
 		}
 	}
-
-	fmt.Fprintf(out, "Orca: installed %s, desired %s", orNone(installed), opts.Orca)
-	if opts.OrcaFrom != "" {
-		fmt.Fprintf(out, " (%s)", opts.OrcaFrom)
-	}
-	fmt.Fprintln(out)
-	switch {
-	case installed != "" && version.Compare(installed, opts.Orca) >= 0:
-		if installed != opts.Orca {
-			fmt.Fprintf(out, "Orca %s is newer than %s; kept.\n", installed, opts.Orca)
-		} else {
-			fmt.Fprintln(out, "Orca is up to date.")
-		}
-	case agents > 0 && (opts.Confirm == nil || !opts.Confirm(fmt.Sprintf(
-		"Restarting Orca in %s may end the agent sessions running there. Upgrade Orca to %s now?", name, opts.Orca))):
-		fmt.Fprintf(out, "Orca: not upgraded; run `orcasm upgrade %s` once the agents are done.\n", name)
-	default:
-		argv := []string{"bash", "-c", upgradeOrca, "upgrade-orca", guest.User, strconv.Itoa(cfg.HostPort), opts.Orca}
+	if orcaBehind {
+		argv := []string{"bash", "-c", upgradeOrca, "upgrade-orca", guest.User, strconv.Itoa(cfg.HostPort), opts.Orca.Version}
 		if err := m.Installer.ExecStreaming(ctx, name, "", out, argv...); err != nil {
 			return res, fmt.Errorf("upgrade Orca in %s: %w", name, err)
 		}
-		installed, res.OrcaRestarted = opts.Orca, true
+		installed, res.OrcaRestarted = opts.Orca.Version, true
 	}
-	if err := SaveInstalled(m.ConfigDir, name, Installed{Orca: installed}); err != nil {
+	if err := SaveInstalled(m.ConfigDir, name, Installed{Orca: installed, Orcasm: opts.Orcasm}); err != nil {
 		return res, err
 	}
 	return res, nil
+}
+
+// reinstallOrcasmLayer reinstalls orcasm's own layer, the binary included.
+func (m Manager) reinstallOrcasmLayer(ctx context.Context, cfg wizard.Config, binary string, out io.Writer) error {
+	wrappers, rest, err := orcasmLayer(cfg)
+	if err != nil {
+		return err
+	}
+	if err := runSteps(ctx, m.Installer, cfg.Name, out, wrappers); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "==> Installing this orcasm in the Sandbox")
+	if err := InstallOrcasm(ctx, m.Installer, cfg, binary, out); err != nil {
+		return fmt.Errorf("install orcasm in %s: %w", cfg.Name, err)
+	}
+	if err := runSteps(ctx, m.Installer, cfg.Name, out, rest...); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "Workbenches take the new Workbench layer at their next agent launch, once idle.")
+	return nil
+}
+
+// reportOrca prints installed vs desired Orca and reports whether the
+// installed one is older, so to be upgraded.
+func (m Manager) reportOrca(installed string, desired OrcaTarget, out io.Writer) (behind bool) {
+	fmt.Fprintf(out, "Orca: installed %s, desired %s", orNone(installed), desired.Version)
+	if desired.From != "" {
+		fmt.Fprintf(out, " (%s)", desired.From)
+	}
+	fmt.Fprintln(out)
+	switch {
+	case installed == "" || version.Compare(installed, desired.Version) < 0:
+		return true
+	case installed != desired.Version:
+		fmt.Fprintf(out, "Orca %s is newer than %s; kept.\n", installed, desired.Version)
+	default:
+		fmt.Fprintln(out, "Orca is up to date.")
+	}
+	return false
+}
+
+// mayInterruptAgents reports whether the harness update and Orca restart
+// may go ahead: at once with no agent running, else only once confirmed.
+func (m Manager) mayInterruptAgents(ctx context.Context, name string, orca, harnesses bool, opts UpgradeOptions, out io.Writer) (bool, error) {
+	agents, err := m.runningAgents(ctx, name)
+	if err != nil || agents == 0 {
+		return err == nil, err
+	}
+	var what []string
+	if harnesses {
+		what = append(what, "updating the agent harnesses")
+	}
+	if orca {
+		what = append(what, "restarting Orca to upgrade it to "+opts.Orca.Version)
+	}
+	q := fmt.Sprintf("Agents are running in %s; %s may end their sessions. Go ahead now?", name, strings.Join(what, " and "))
+	if opts.Confirm != nil && opts.Confirm(q) {
+		return true, nil
+	}
+	fmt.Fprintf(out, "Not %s; run `orcasm upgrade %s` once the agents are done.\n", strings.Join(what, " nor "), name)
+	return false, nil
 }
 
 // installedOrca is the Sandbox's orca-ide package version ("" if none).

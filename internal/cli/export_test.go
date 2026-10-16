@@ -12,7 +12,9 @@ import (
 // never boot a VM. It returns a func restoring the real one.
 func SetCreate(f func(context.Context, wizard.Config, sandbox.SecretValue, io.Writer) error) (restore func()) {
 	old := create
-	create = f
+	create = func(ctx context.Context, _ BuildInfo, cfg wizard.Config, sv sandbox.SecretValue, out io.Writer) error {
+		return f(ctx, cfg, sv, out)
+	}
 	return func() { create = old }
 }
 
