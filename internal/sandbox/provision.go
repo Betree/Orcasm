@@ -46,6 +46,12 @@ type CreateMSB interface {
 //go:embed provision.sh
 var provisionScript string
 
+// orcaFunctions defines the shell functions installing Orca and the
+// harnesses, shared with upgrades (orca.sh).
+//
+//go:embed orca.sh
+var orcaFunctions string
+
 // MainPath is where Main lives in the Sandbox for the Project at projectPath.
 // It exists (empty, owned by guest.User) once Provision returns, and is the
 // working directory of msb exec and SSH sessions.
@@ -63,7 +69,7 @@ type SecretValue func(wizard.Secret) (string, error)
 //
 // cfg.Secrets become msb secrets, valued through secretValue; every later
 // `msb start` of the Sandbox needs those values again.
-func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue SecretValue, out io.Writer) error {
+func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, orcaVersion string, secretValue SecretValue, out io.Writer) error {
 	// Checked here, not just in the Wizard: a failed create is cleaned up
 	// with `msb rm`, which must never hit someone else's sandbox.
 	all, err := m.List(ctx)
@@ -110,8 +116,8 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	if err := m.ExecStreaming(ctx, cfg.Name, "", out, agentsInstallArgv(cfg.Harnesses)...); err != nil {
 		return fmt.Errorf("install the agent wrappers in Sandbox %s: %w", cfg.Name, err)
 	}
-	argv := append([]string{"bash", "-c", provisionScript, "provision",
-		guest.User, strconv.Itoa(cfg.HostPort), OrcaVersion, main, cfg.Git.Name, cfg.Git.Email},
+	argv := append([]string{"bash", "-c", orcaFunctions + provisionScript, "provision",
+		guest.User, strconv.Itoa(cfg.HostPort), orcaVersion, main, cfg.Git.Name, cfg.Git.Email},
 		cfg.Harnesses...)
 	if err := m.ExecStreaming(ctx, cfg.Name, "", out, argv...); err != nil {
 		return fmt.Errorf("provision Sandbox %s (kept for inspection; `msb rm --force %s` to discard): %w",

@@ -32,7 +32,12 @@ var create = func(ctx context.Context, cfg wizard.Config, secretValue sandbox.Se
 	if err != nil {
 		return err
 	}
-	return sandbox.NewCreator(msb.CLI{}, ssh, secretValue, dir, guestBinary).Create(ctx, cfg, out)
+	orca, from, err := sandbox.NewOrcaSource(build.Version).Desired(ctx, false)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "==> Using Orca %s (%s)\n", orca, from)
+	return sandbox.NewCreator(msb.CLI{}, ssh, secretValue, dir, guestBinary, orca).Create(ctx, cfg, out)
 }
 
 func newCreateCmd(BuildInfo) *cobra.Command {

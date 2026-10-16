@@ -17,7 +17,7 @@ import (
 func proxyExec(t *testing.T) execCall {
 	t.Helper()
 	f := &fakeCreateMSB{}
-	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard); err != nil {
+	if err := sandbox.Provision(context.Background(), f, demoConfig(), sandbox.OrcaVersion, hostValues, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	i := slices.IndexFunc(f.execs, func(c execCall) bool {

@@ -18,6 +18,10 @@ type BuildInfo struct {
 
 var subcommands []func(BuildInfo) *cobra.Command
 
+// build is the BuildInfo of the last root command built, for code running
+// outside a command's constructor (create).
+var build BuildInfo
+
 // bareRun is what `orcasm` without a subcommand does (set in bare.go).
 var bareRun func(*cobra.Command, []string) error
 
@@ -29,6 +33,7 @@ func register(newCmd func(BuildInfo) *cobra.Command) {
 
 // NewRootCommand builds a fresh `orcasm` command tree.
 func NewRootCommand(info BuildInfo) *cobra.Command {
+	build = info
 	root := &cobra.Command{
 		Use:           "orcasm",
 		Short:         "Give a Project a Sandbox where many coding agents work in parallel",
