@@ -2,7 +2,9 @@ package sandbox
 
 // orcasm inside the Sandbox: Orca's repo hooks run `orcasm worktree
 // setup|archive` (internal/worktree), so the Sandbox gets a linux orcasm
-// binary and the Project's Worktree config.
+// binary and the Project's Worktree config. The agent wrappers
+// (internal/workbench, installed by Provision) use `orcasm worktree
+// workbench`, and the hook relay unit (internal/hookrelay) runs orcasm.
 
 import (
 	"context"
@@ -29,18 +31,49 @@ type GuestMSB interface {
 // stagedBinary is where the binary lands before the installer moves it.
 const stagedBinary = "/tmp/orcasm.new"
 
-// guestInstaller installs the staged binary and the Worktree config, and
-// creates WorktreesDir for User. ORCASM_ROOT relocates it all and
-// ORCASM_OWNER replaces User (tests).
-// Args: install-orcasm <staged binary> <binary> <config file> <config json> <worktrees dir> <user>.
+// guestInstaller installs the staged binary and the Worktree config,
+// creates WorktreesDir for User and starts the hook relay unit. ORCASM_ROOT
+// relocates it all (and skips systemctl) and ORCASM_OWNER replaces User
+// (tests).
+// Args: install-orcasm <staged binary> <binary> <config file> <config json>
+// <worktrees dir> <user> <unit name> <unit>.
 const guestInstaller = `set -euo pipefail
 root=${ORCASM_ROOT:-}
-staged=$1 bin=$2 conf=$3 json=$4 worktrees=$5 owner=${ORCASM_OWNER:-$6}
+staged=$1 bin=$2 conf=$3 json=$4 worktrees=$5 owner=${ORCASM_OWNER:-$6} unit_name=$7 unit=$8
 install -d "$root$(dirname "$bin")" "$root$(dirname "$conf")"
 install -m 0755 "$root$staged" "$root$bin"
 rm -f "$root$staged"
 printf '%s\n' "$json" >"$root$conf"
 install -d -o "$owner" -g "$owner" "$root$worktrees"
+install -d "$root/etc/systemd/system"
+printf '%s' "$unit" >"$root/etc/systemd/system/$unit_name.service"
+if [ -z "$root" ]; then
+  systemctl daemon-reload
+  systemctl enable "$unit_name" >/dev/null 2>&1
+  systemctl restart "$unit_name"
+fi
+`
+
+// HookRelayUnit is the systemd unit relaying Orca's agent hook port to
+// Docker's bridge, for agents in Workbenches (internal/hookrelay).
+const HookRelayUnit = "orcasm-hook-relay"
+
+// hookRelayUnit runs `orcasm worktree hook-relay` as User, who runs Orca
+// (its endpoint file is in User's Orca user data).
+var hookRelayUnit = `[Unit]
+Description=Relay Orca's agent hooks from Workbenches (orcasm)
+After=docker.service ` + OrcaUnit + `.service
+Wants=docker.service
+
+[Service]
+User=` + User + `
+Environment=HOME=/home/` + User + `
+ExecStart=` + worktree.Binary + ` worktree hook-relay
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
 `
 
 // InstallOrcasm copies binary (orcasm built for the Sandbox: linux, the
@@ -69,7 +102,8 @@ func InstallOrcasm(ctx context.Context, m GuestMSB, cfg wizard.Config, binary st
 		return err
 	}
 	return m.ExecStreaming(ctx, cfg.Name, "", out, "bash", "-c", guestInstaller, "install-orcasm",
-		stagedBinary, worktree.Binary, worktree.ConfigFile, string(raw), WorktreesDir, User)
+		stagedBinary, worktree.Binary, worktree.ConfigFile, string(raw), WorktreesDir, User,
+		HookRelayUnit, hookRelayUnit)
 }
 
 // GuestBinary is the orcasm binary to install in Sandboxes: this very

@@ -8,13 +8,12 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Betree/Orcasm/internal/workbench"
 )
 
-// rig runs the agent wrapper as `claude` against fake docker/socat/pgrep and
-// a fake real agent, all recording their argv under rec.
+// rig runs the agent wrapper as `claude` against fake docker and orcasm
+// and a fake real agent, all recording their argv under rec.
 type rig struct {
 	t         *testing.T
 	home      string
@@ -31,9 +30,9 @@ func newRig(t *testing.T) *rig {
 	r := &rig{
 		t:         t,
 		home:      filepath.Join(root, "home"),
-		worktrees: filepath.Join(root, "home", "orca", "workspaces"),
+		worktrees: filepath.Join(root, "worktrees"),
 		bin:       filepath.Join(root, "fakebin"),
-		agentBin:  filepath.Join(root, "agentbin"),
+		agentBin:  filepath.Join(root, "harness", "bin"),
 		rec:       filepath.Join(root, "rec"),
 		wrapper:   filepath.Join(root, "wrappers", "claude"),
 	}
@@ -42,21 +41,30 @@ func newRig(t *testing.T) *rig {
 	}
 	must(t, os.WriteFile(r.wrapper, workbench.AgentWrapper, 0o755))
 	r.script(filepath.Join(r.agentBin, "claude"), `echo "real claude $*"`)
-	r.script(filepath.Join(r.bin, "docker"), `echo "$*" >>"$REC/docker"
-case $1 in ps) cat "$REC/ps-output" 2>/dev/null ;; esac`)
-	r.script(filepath.Join(r.bin, "socat"), `echo "$*" >"$REC/socat"`)
-	r.script(filepath.Join(r.bin, "pgrep"), `exit 1`)
+	r.script(filepath.Join(r.bin, "docker"), `echo "$*" >>"$REC/docker"`)
+	// `orcasm worktree workbench DIR`: progress on stderr, the id on stdout.
+	r.script(filepath.Join(r.bin, "orcasm"), `echo "$*" >>"$REC/orcasm"
+echo "orcasm: the Stack is up" >&2
+cat "$REC/workbench" 2>/dev/null || { echo "orcasm: Worktree has no Stack" >&2; exit 1; }`)
 	return r
 }
 
 func (r *rig) script(path, body string) {
 	r.t.Helper()
+	must(r.t, os.MkdirAll(filepath.Dir(path), 0o755))
 	must(r.t, os.WriteFile(path, []byte("#!/bin/bash\n"+body+"\n"), 0o755))
 }
 
-// workbench makes `docker ps` report a running Workbench for worktree.
-func (r *rig) workbench(id, worktree string) {
-	must(r.t, os.WriteFile(filepath.Join(r.rec, "ps-output"), []byte(id+" "+worktree+"\n"), 0o644))
+// workbench makes `orcasm worktree workbench` name a running Workbench.
+func (r *rig) workbench(id string) {
+	must(r.t, os.WriteFile(filepath.Join(r.rec, "workbench"), []byte(id+"\n"), 0o644))
+}
+
+// worktree creates Orca's Worktree <worktrees>/demo/wt1 and returns it.
+func (r *rig) worktree() string {
+	wt := filepath.Join(r.worktrees, "demo", "wt1")
+	must(r.t, os.MkdirAll(wt, 0o755))
+	return wt
 }
 
 func (r *rig) run(dir string, env []string, args ...string) (string, error) {
@@ -67,6 +75,7 @@ func (r *rig) run(dir string, env []string, args ...string) (string, error) {
 		"PATH=" + r.bin + ":/usr/bin:/bin",
 		"REC=" + r.rec,
 		"ORCASM_AGENT_BIN_DIR=" + r.agentBin,
+		"ORCASM_WORKTREES=" + r.worktrees,
 	}, env...)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -75,30 +84,6 @@ func (r *rig) run(dir string, env []string, args ...string) (string, error) {
 func (r *rig) recorded(name string) string {
 	b, _ := os.ReadFile(filepath.Join(r.rec, name))
 	return string(b)
-}
-
-func must(t *testing.T, err error) {
-	t.Helper()
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestOutsideAWorktreeTheAgentRunsInTheSandbox(t *testing.T) {
-	r := newRig(t)
-	main := filepath.Join(r.home, "demo")
-	must(t, os.MkdirAll(main, 0o755))
-
-	out, err := r.run(main, nil, "--dangerously-skip-permissions")
-	if err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	if out != "real claude --dangerously-skip-permissions\n" {
-		t.Errorf("got %q", out)
-	}
-	if strings.Contains(r.recorded("docker"), "exec") {
-		t.Errorf("docker exec was called: %s", r.recorded("docker"))
-	}
 }
 
 func (r *rig) execLine() string {
@@ -110,12 +95,35 @@ func (r *rig) execLine() string {
 	return ""
 }
 
-func TestInAWorktreeTheAgentRunsInItsWorkbench(t *testing.T) {
+func must(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOnMainTheAgentRunsDirectlyInTheSandbox(t *testing.T) {
 	r := newRig(t)
-	wt := filepath.Join(r.worktrees, "demo", "wt1")
-	sub := filepath.Join(wt, "pkg")
+	main := filepath.Join(r.home, "demo")
+	must(t, os.MkdirAll(main, 0o755))
+
+	out, err := r.run(main, nil, "--dangerously-skip-permissions")
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if out != "real claude --dangerously-skip-permissions\n" {
+		t.Errorf("got %q", out)
+	}
+	if r.recorded("docker") != "" || r.recorded("orcasm") != "" {
+		t.Errorf("looked for a Workbench: docker %q, orcasm %q", r.recorded("docker"), r.recorded("orcasm"))
+	}
+}
+
+func TestInAWorktreeTheAgentRunsInItsWorkbenchOnceTheStackIsUp(t *testing.T) {
+	r := newRig(t)
+	sub := filepath.Join(r.worktree(), "pkg")
 	must(t, os.MkdirAll(sub, 0o755))
-	r.workbench("c0ffee", wt)
+	r.workbench("c0ffee")
 
 	out, err := r.run(sub, []string{"ORCA_PANE_KEY=tab:pane", "ORCA_AGENT_HOOK_TOKEN=secret", "UNRELATED=x"}, "--resume", "abc")
 	if err != nil {
@@ -123,6 +131,13 @@ func TestInAWorktreeTheAgentRunsInItsWorkbench(t *testing.T) {
 	}
 	if strings.Contains(out, "real claude") {
 		t.Errorf("ran in the Sandbox: %s", out)
+	}
+	// The wait (and its progress) is orcasm's, shown to the user.
+	if r.recorded("orcasm") != "worktree workbench "+sub+"\n" {
+		t.Errorf("orcasm called with %q", r.recorded("orcasm"))
+	}
+	if !strings.Contains(out, "the Stack is up") {
+		t.Errorf("progress not shown: %q", out)
 	}
 	line := r.execLine()
 	for _, want := range []string{
@@ -146,6 +161,19 @@ func TestInAWorktreeTheAgentRunsInItsWorkbench(t *testing.T) {
 	}
 }
 
+func TestWithoutAWorkbenchTheAgentDoesNotFallBackToTheSandbox(t *testing.T) {
+	r := newRig(t)
+	wt := r.worktree()
+
+	out, err := r.run(wt, nil)
+	if err == nil {
+		t.Fatalf("succeeded: %s", out)
+	}
+	if !strings.Contains(out, "no Stack") || strings.Contains(out, "real claude") || r.execLine() != "" {
+		t.Errorf("got %q, docker %q", out, r.recorded("docker"))
+	}
+}
+
 // A stand-in for Orca's ~/.orca/agent-hooks/claude-hook.sh: the two things
 // the Workbench copy must change are the PID capture and the loopback POST.
 const orcaHookScript = `#!/bin/sh
@@ -160,10 +188,8 @@ func TestTheWorkbenchCopyOfOrcasHookScriptsReachesOrca(t *testing.T) {
 	hooks := filepath.Join(r.home, ".orca", "agent-hooks")
 	must(t, os.MkdirAll(hooks, 0o755))
 	must(t, os.WriteFile(filepath.Join(hooks, "claude-hook.sh"), []byte(orcaHookScript), 0o755))
-	wt := filepath.Join(r.worktrees, "demo", "wt1")
-	must(t, os.MkdirAll(wt, 0o755))
-	r.workbench("c0ffee", wt)
-	if out, err := r.run(wt, nil); err != nil {
+	r.workbench("c0ffee")
+	if out, err := r.run(r.worktree(), nil); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 
@@ -183,44 +209,46 @@ func TestTheWorkbenchCopyOfOrcasHookScriptsReachesOrca(t *testing.T) {
 	if string(out) != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}
-}
-
-func TestTheHookPortIsRelayedFromTheBridgeToOrca(t *testing.T) {
-	r := newRig(t)
-	wt := filepath.Join(r.worktrees, "demo", "wt1")
-	must(t, os.MkdirAll(wt, 0o755))
-	r.workbench("c0ffee", wt)
-	endpoint := filepath.Join(r.home, "endpoint.env")
-	// Orca rewrites this file on restart; the env of an old shell goes stale.
-	must(t, os.WriteFile(endpoint, []byte("ORCA_AGENT_HOOK_PORT=40001\nORCA_AGENT_HOOK_VERSION=1\n"), 0o600))
-
-	if out, err := r.run(wt, []string{"ORCA_AGENT_HOOK_PORT=1", "ORCA_AGENT_HOOK_ENDPOINT=" + endpoint}); err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	want := "TCP-LISTEN:40001,bind=172.17.0.1,reuseaddr,fork TCP:127.0.0.1:40001\n"
-	var got string
-	for i := 0; i < 50 && got == ""; i++ { // socat is started in the background
-		time.Sleep(20 * time.Millisecond)
-		got = r.recorded("socat")
-	}
-	if got != want {
-		t.Errorf("socat got %q, want %q", got, want)
+	// Orca's own scripts still serve Main.
+	if orig, _ := os.ReadFile(filepath.Join(hooks, "claude-hook.sh")); string(orig) != orcaHookScript {
+		t.Errorf("Orca's script was changed:\n%s", orig)
 	}
 }
 
-func TestARunningRelayIsReused(t *testing.T) {
-	r := newRig(t)
-	r.script(filepath.Join(r.bin, "pgrep"), `exit 0`)
-	wt := filepath.Join(r.worktrees, "demo", "wt1")
-	must(t, os.MkdirAll(wt, 0o755))
-	r.workbench("c0ffee", wt)
+// The line of Orca's OpenCode status plugin that posts to its hook server.
+const openCodePluginPost = "  const url = `http://127.0.0.1:${coords.port}/hook/opencode`;\n"
 
-	if out, err := r.run(wt, []string{"ORCA_AGENT_HOOK_PORT=40001"}); err != nil {
+func TestOpenCodeInTheWorkbenchGetsAStatusPluginPostingToTheBridge(t *testing.T) {
+	r := newRig(t)
+	opencode := filepath.Join(filepath.Dir(r.wrapper), "opencode")
+	must(t, os.WriteFile(opencode, workbench.AgentWrapper, 0o755))
+	r.wrapper = opencode
+	r.script(filepath.Join(r.agentBin, "opencode"), "")
+	plugin := filepath.Join(r.home, ".config", "opencode", "plugins", "orca-status.js")
+	must(t, os.MkdirAll(filepath.Dir(plugin), 0o755))
+	must(t, os.WriteFile(plugin, []byte(openCodePluginPost), 0o644))
+	r.workbench("c0ffee")
+
+	if out, err := r.run(r.worktree(), nil); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	time.Sleep(200 * time.Millisecond)
-	if got := r.recorded("socat"); got != "" {
-		t.Errorf("started a second relay: %q", got)
+	line := r.execLine()
+	_, after, ok := strings.Cut(line, "-e OPENCODE_CONFIG_DIR=")
+	if !ok {
+		t.Fatalf("no OPENCODE_CONFIG_DIR in %q", line)
+	}
+	dir := strings.Fields(after)[0]
+	if !strings.HasPrefix(dir, filepath.Join(r.home, ".cache", "orcasm", "opencode-config")+"/") {
+		t.Errorf("OPENCODE_CONFIG_DIR=%s is outside the Workbench's copy dir", dir)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "plugins", "orca-status.js"))
+	must(t, err)
+	want := "  const url = `http://${process.env.ORCASM_HOOK_HOST || \"127.0.0.1\"}:${coords.port}/hook/opencode`;\n"
+	if string(got) != want {
+		t.Errorf("plugin copy\n%s\nwant\n%s", got, want)
+	}
+	if orig, _ := os.ReadFile(plugin); string(orig) != openCodePluginPost {
+		t.Errorf("Orca's plugin was changed:\n%s", orig)
 	}
 }
 
@@ -234,37 +262,19 @@ func TestCodexRunsAsItsNativeBinarySoTheWorkbenchNeedsNoNode(t *testing.T) {
 	// npm's layout: bin/codex -> lib/node_modules/@openai/codex/bin/codex.js
 	codexPkg := filepath.Join(r.agentBin, "..", "lib", "node_modules", "@openai", "codex")
 	native := filepath.Join(codexPkg, "node_modules", "@openai", pkg, "vendor", triple, "bin", "codex")
-	must(t, os.MkdirAll(filepath.Dir(native), 0o755))
-	must(t, os.MkdirAll(filepath.Join(codexPkg, "bin"), 0o755))
 	r.script(filepath.Join(codexPkg, "bin", "codex.js"), "")
 	r.script(native, "")
 	must(t, os.Symlink(filepath.Join(codexPkg, "bin", "codex.js"), filepath.Join(r.agentBin, "codex")))
 	codexWrapper := filepath.Join(filepath.Dir(r.wrapper), "codex")
 	must(t, os.WriteFile(codexWrapper, workbench.AgentWrapper, 0o755))
 	r.wrapper = codexWrapper
-	wt := filepath.Join(r.worktrees, "demo", "wt1")
-	must(t, os.MkdirAll(wt, 0o755))
-	r.workbench("c0ffee", wt)
+	r.workbench("c0ffee")
 
-	if out, err := r.run(wt, nil, "--no-daemon"); err != nil {
+	if out, err := r.run(r.worktree(), nil, "--no-daemon"); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
 	nativeReal, _ := filepath.EvalSymlinks(native)
 	if want := " c0ffee " + nativeReal + " --no-daemon"; !strings.HasSuffix(r.execLine(), want) {
 		t.Errorf("docker exec line does not end with %q:\n%s", want, r.execLine())
-	}
-}
-
-func TestAWorktreeWithoutARunningWorkbenchFails(t *testing.T) {
-	r := newRig(t)
-	wt := filepath.Join(r.worktrees, "demo", "wt1")
-	must(t, os.MkdirAll(wt, 0o755))
-
-	out, err := r.run(wt, nil)
-	if err == nil {
-		t.Fatalf("succeeded: %s", out)
-	}
-	if !strings.Contains(out, "Workbench") || strings.Contains(out, "real claude") {
-		t.Errorf("got %q", out)
 	}
 }

@@ -31,20 +31,75 @@ const (
 	// for Workbenches, mounted read-only at the same path.
 	HarnessLayer = "/opt/orcasm/harness"
 	// GenericWorkbench is the service added when the Project names no
-	// Workbench, running GenericImage.
+	// Workbench, running GenericImage (built from genericDockerfile).
 	GenericWorkbench = "orcasm-workbench"
-	GenericImage     = "ubuntu:24.04"
+	GenericImage     = "orcasm-workbench:24.04"
 	// overrideName is the generated file, written in Generate's dir.
 	overrideName = "compose.orcasm.yaml"
 )
 
-// harnessDirs are the config dirs of each harness, relative to the home
-// directory, shared read-write between Main and every Workbench.
-var harnessDirs = map[string][]string{
-	"claude":   {".claude"},
-	"codex":    {".codex"},
-	"opencode": {".config/opencode", ".local/share/opencode"},
+// genericDockerfile builds GenericImage: what agents and Orca's hook
+// scripts (sh, curl, base64, tr, awk, sed) need, on glibc for Claude Code.
+const genericDockerfile = `FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git less openssh-client \
+ && rm -rf /var/lib/apt/lists/*
+`
+
+// share is a directory of the Sandbox user's home given to the Workbench;
+// paths are relative to the home directory.
+type share struct {
+	src, dst string // dst "" = src
+	ro       bool
 }
+
+// The Workbench gets only what its agents need from the Sandbox user's home,
+// not the whole of it: the harnesses' config, Orca's per-agent plumbing and
+// the git identity. Orca's own state (~/.config/orca: its runtime socket
+// and token, which drive Orca and so the whole Sandbox) stays out.
+var (
+	// harnessShares are each harness's config, shared read-write with Main
+	// and every Workbench, plus what Orca prepares per launch.
+	harnessShares = map[string][]share{
+		"claude": {{src: ".claude"}},
+		// Orca's managed Codex home, should it set CODEX_HOME to it.
+		"codex":    {{src: ".codex"}, {src: ".config/orca/codex-runtime-home"}},
+		"opencode": {{src: ".config/opencode"}, {src: ".local/share/opencode"}, {src: OpenCodeConfigCopy, ro: true}},
+	}
+	// hookShares let any harness's hooks reach Orca: its endpoint file and
+	// spool, and the wrapper's rewritten hook scripts where Orca's settings
+	// call them.
+	hookShares = []share{
+		{src: ".config/orca/agent-hooks"},
+		{src: HookScriptsCopy, dst: ".orca/agent-hooks", ro: true},
+	}
+	// homeShares are given to every Workbench.
+	homeShares = []share{{src: ".config/git"}}
+)
+
+const (
+	// HookScriptsCopy is where the agent wrapper writes its Workbench copy
+	// of Orca's hook scripts (~/.orca/agent-hooks), relative to the home.
+	HookScriptsCopy = ".cache/orcasm/agent-hooks"
+	// OpenCodeConfigCopy is where the agent wrapper copies OpenCode's
+	// per-launch config overlay, relative to the home.
+	OpenCodeConfigCopy = ".cache/orcasm/opencode-config"
+)
+
+// shares are the home directories spec's Workbench gets.
+func shares(spec Spec) []share {
+	out := append([]share(nil), homeShares...)
+	if len(spec.Harnesses) > 0 {
+		out = append(out, hookShares...)
+	}
+	for _, h := range spec.Harnesses {
+		out = append(out, harnessShares[h]...)
+	}
+	return out
+}
+
+// hostGateway names the Sandbox from the Workbench: Docker's bridge
+// gateway, where the hook relay listens (internal/hookrelay).
+const hostGateway = "host.docker.internal:host-gateway"
 
 // caEnv are the variables pointing tools with their own CA list at
 // CABundle.
@@ -156,11 +211,11 @@ func Generate(ctx context.Context, docker Docker, spec Spec, dir string) (Stack,
 		return Stack{}, fmt.Errorf("web service %q is not in the Compose files %v", st.WebService, spec.ComposeFiles)
 	}
 
-	for _, h := range spec.Harnesses {
-		for _, d := range harnessDirs[h] {
-			if err := os.MkdirAll(filepath.Join(spec.Home, d), 0o755); err != nil {
-				return Stack{}, err
-			}
+	// Created up front, by the Sandbox user: Docker would create them as
+	// root.
+	for _, sh := range shares(spec) {
+		if err := os.MkdirAll(filepath.Join(spec.Home, sh.src), 0o755); err != nil {
+			return Stack{}, err
 		}
 	}
 	raw, err := yaml.Marshal(override(spec, st.Workbench, services))
@@ -253,6 +308,7 @@ func override(spec Spec, workbench string, services []string) *yaml.Node {
 	if workbench == GenericWorkbench {
 		svc := mapping(
 			scalar("image"), scalar(GenericImage),
+			scalar("build"), mapping(scalar("dockerfile_inline"), scalar(genericDockerfile)),
 			scalar("command"), sequence("sleep", "infinity"),
 			scalar("init"), &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: "true"},
 			scalar("working_dir"), scalar(spec.Checkouts[0].Path),
@@ -276,21 +332,36 @@ func workbenchSetup(spec Spec) []*yaml.Node {
 		}
 	}
 	vols = append(vols, sandboxCABundle+":"+CABundle+":ro", HarnessLayer+":"+HarnessLayer+":ro")
-	for _, h := range spec.Harnesses {
-		for _, d := range harnessDirs[h] {
-			p := filepath.Join(spec.Home, d)
-			vols = append(vols, p+":"+p)
+	for _, sh := range shares(spec) {
+		dst := sh.dst
+		if dst == "" {
+			dst = sh.src
 		}
+		v := filepath.Join(spec.Home, sh.src) + ":" + filepath.Join(spec.Home, dst)
+		if sh.ro {
+			v += ":ro"
+		}
+		vols = append(vols, v)
 	}
 	env := mapping()
 	for _, v := range caEnv {
 		env.Content = append(env.Content, scalar(v), scalar(CABundle))
 	}
+	if slices.Contains(spec.Harnesses, "claude") {
+		// Claude keeps ~/.claude.json, which it and Orca replace by rename,
+		// in this mounted directory instead (provisioning sets it Sandbox
+		// wide): a single-file mount would keep the stale inode.
+		env.Content = append(env.Content, scalar("CLAUDE_CONFIG_DIR"), scalar(filepath.Join(spec.Home, ".claude")))
+	}
 	for _, name := range spec.Secrets {
 		// msb's placeholder; $$ keeps Compose from interpolating it.
 		env.Content = append(env.Content, scalar(name), scalar("$$MSB_"+name))
 	}
-	return []*yaml.Node{scalar("volumes"), sequence(vols...), scalar("environment"), env}
+	out := []*yaml.Node{scalar("volumes"), sequence(vols...), scalar("environment"), env}
+	if len(spec.Harnesses) > 0 {
+		out = append(out, scalar("extra_hosts"), sequence(hostGateway))
+	}
+	return out
 }
 
 // ProxyLabel marks the containers the Sandbox's proxy routes to: it watches

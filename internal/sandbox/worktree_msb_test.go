@@ -54,7 +54,7 @@ func TestWorktreeHooksInARealSandbox(t *testing.T) {
 		Name:        name,
 		Resources:   wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 50},
 		HostPort:    port,
-		Harnesses:   []string{"claude"},
+		Harnesses:   []string{"claude", "codex", "opencode"},
 		Project:     wizard.Project{ComposeFiles: []string{"compose.yml"}, WebService: "web", WebPort: 80},
 	}
 	main := sandbox.MainPath(project)
@@ -125,6 +125,29 @@ func TestWorktreeHooksInARealSandbox(t *testing.T) {
 	// #20's proxy routes the Worktree's host name to its web service.
 	if got := dev("curl -s -o /dev/null -w '%{http_code}' http://" + stack.Hostname(wt) + "/"); got != "200" {
 		t.Errorf("http://%s/ answered %q", stack.Hostname(wt), got)
+	}
+
+	// #19: each harness's wrapper runs it in the Workbench, whose hook
+	// scripts reach Orca through the relay. Orca installed its Claude hooks
+	// because the wrapper was on its PATH when it started.
+	if got := dev("systemctl is-active " + sandbox.HookRelayUnit); strings.TrimSpace(got) != "active" {
+		t.Errorf("%s: %q", sandbox.HookRelayUnit, got)
+	}
+	if got := dev("ls ~/.orca/agent-hooks/"); !strings.Contains(got, "claude-hook.sh") {
+		t.Errorf("Orca installed no Claude hooks: %q", got)
+	}
+	for _, h := range cfg.Harnesses {
+		if got := dev("cd " + path + " && " + h + " --version 2>/dev/null"); strings.TrimSpace(got) == "" {
+			t.Errorf("%s --version in the Worktree printed nothing", h)
+		}
+	}
+	if got := dev("ls ~/.cache/orcasm/agent-hooks/"); !strings.Contains(got, "claude-hook.sh") {
+		t.Errorf("the wrapper made no Workbench copy of Orca's hooks: %q", got)
+	}
+	hookPort := strings.TrimSpace(dev("grep -o '[0-9]*$' <<<\"$(grep ^ORCA_AGENT_HOOK_PORT= ~/.config/orca/agent-hooks/endpoint.env)\""))
+	if got := dev("docker compose -p " + project + " exec -T orcasm-workbench curl -s -o /dev/null -w '%{http_code}' -X POST http://host.docker.internal:" + hookPort + "/hook/claude || true"); got != "403" {
+		// Unauthenticated, so refused: but by Orca, through the relay.
+		t.Errorf("hook POST from the Workbench answered %q, want Orca's 403", got)
 	}
 
 	dev("orca-ide worktree rm --worktree path:" + path + " --run-hooks --json >/dev/null")

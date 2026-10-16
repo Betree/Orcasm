@@ -34,6 +34,12 @@ func DefaultRuntime() (Runtime, error) {
 	return Runtime{UserData: filepath.Join(config, "orca")}, nil
 }
 
+// HookEndpointFile is where Orca writes its agent hook server's current
+// port and token (ORCA_AGENT_HOOK_PORT=...), rewritten on each start.
+func (r Runtime) HookEndpointFile() string {
+	return filepath.Join(r.UserData, "agent-hooks", "endpoint.env")
+}
+
 // HookSettings are a repo's hook settings in Orca's own state (no
 // orca.yaml); an update replaces them whole.
 type HookSettings struct {

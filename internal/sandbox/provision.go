@@ -110,6 +110,10 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 		_ = m.Remove(ctx, cfg.Name)
 		return fmt.Errorf("create Sandbox %s: %w", cfg.Name, err)
 	}
+	fmt.Fprintln(out, "==> Installing the agent wrappers")
+	if err := m.ExecStreaming(ctx, cfg.Name, "", out, agentsInstallArgv(cfg.Harnesses)...); err != nil {
+		return fmt.Errorf("install the agent wrappers in Sandbox %s: %w", cfg.Name, err)
+	}
 	argv := append([]string{"bash", "-c", provisionScript, "provision",
 		User, strconv.Itoa(cfg.HostPort), OrcaVersion, main, cfg.Git.Name, cfg.Git.Email},
 		cfg.Harnesses...)

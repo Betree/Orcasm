@@ -362,3 +362,99 @@ func TestComposeFileOutsideEveryRepositoryIsRefused(t *testing.T) {
 		t.Fatal("Generate accepted a compose file outside every Repository")
 	}
 }
+
+// home is the Sandbox user's home in s, joined with rel.
+func home(s stack.Spec, rel string) string { return filepath.Join(s.Home, rel) }
+
+func TestWorkbenchAgentsReachOrcasHookServer(t *testing.T) {
+	s := spec(t)
+	s.Harnesses = []string{"claude"}
+	_, o, _ := generate(t, s, "app")
+	if hosts := list(t, o, "app", "extra_hosts"); !slices.Contains(hosts, "host.docker.internal:host-gateway") {
+		t.Errorf("extra_hosts = %q", hosts)
+	}
+	vols := list(t, o, "app", "volumes")
+	for _, want := range []string{
+		// Orca's endpoint file and spool, written by both sides.
+		home(s, ".config/orca/agent-hooks") + ":" + home(s, ".config/orca/agent-hooks"),
+		// The wrapper's rewritten hook scripts, where Orca's settings call them.
+		home(s, ".cache/orcasm/agent-hooks") + ":" + home(s, ".orca/agent-hooks") + ":ro",
+	} {
+		if !slices.Contains(vols, want) {
+			t.Errorf("volumes %q lack %q", vols, want)
+		}
+	}
+	if fi, err := os.Stat(home(s, ".cache/orcasm/agent-hooks")); err != nil || !fi.IsDir() {
+		t.Errorf("hook copy dir not created: %v", err)
+	}
+}
+
+func TestWorkbenchGetsOnlyWhatAgentsNeedNotTheWholeHome(t *testing.T) {
+	s := spec(t)
+	s.Harnesses = []string{"claude", "codex", "opencode"}
+	_, o, _ := generate(t, s, "app")
+	for _, v := range list(t, o, "app", "volumes") {
+		src := strings.SplitN(v, ":", 2)[0]
+		if src == s.Home || src == home(s, ".config/orca") || strings.HasSuffix(src, ".claude.json") {
+			t.Errorf("volume %q shares more than the agents need", v)
+		}
+	}
+}
+
+func TestClaudeKeepsItsGlobalConfigInItsConfigDir(t *testing.T) {
+	// ~/.claude.json is replaced by rename (Orca's trust preflight, Claude
+	// itself), so a single-file mount would go stale: Claude reads it from
+	// CLAUDE_CONFIG_DIR, a mounted directory, instead.
+	s := spec(t)
+	s.Harnesses = []string{"claude"}
+	_, o, _ := generate(t, s, "app")
+	if got := env(t, o, "app")["CLAUDE_CONFIG_DIR"]; got != home(s, ".claude") {
+		t.Errorf("CLAUDE_CONFIG_DIR = %q", got)
+	}
+}
+
+func TestWorkbenchCommitsWithTheSandboxGitIdentity(t *testing.T) {
+	s := spec(t)
+	_, o, _ := generate(t, s, "app")
+	p := home(s, ".config/git")
+	if vols := list(t, o, "app", "volumes"); !slices.Contains(vols, p+":"+p) {
+		t.Errorf("volumes %q lack %s", vols, p)
+	}
+}
+
+func TestCodexAndOpenCodeGetOrcasPerLaunchConfig(t *testing.T) {
+	s := spec(t)
+	s.Harnesses = []string{"codex", "opencode"}
+	_, o, _ := generate(t, s, "app")
+	vols := list(t, o, "app", "volumes")
+	codexHome := home(s, ".config/orca/codex-runtime-home")
+	openCode := home(s, ".cache/orcasm/opencode-config")
+	for _, want := range []string{codexHome + ":" + codexHome, openCode + ":" + openCode + ":ro"} {
+		if !slices.Contains(vols, want) {
+			t.Errorf("volumes %q lack %q", vols, want)
+		}
+	}
+}
+
+func TestTheGenericWorkbenchHasWhatOrcasHooksAndAgentsRun(t *testing.T) {
+	s := spec(t)
+	s.Workbench = ""
+	_, o, _ := generate(t, s, "db")
+	var wb struct {
+		Image string
+		Build struct {
+			Inline string `yaml:"dockerfile_inline"`
+		}
+	}
+	if err := mappingOf(o.Services[stack.GenericWorkbench]).Decode(&wb); err != nil {
+		t.Fatal(err)
+	}
+	if wb.Image != stack.GenericImage || !strings.Contains(wb.Build.Inline, "FROM ubuntu:24.04") {
+		t.Errorf("generic Workbench = %+v", wb)
+	}
+	for _, tool := range []string{"curl", "git", "ca-certificates"} {
+		if !strings.Contains(wb.Build.Inline, tool) {
+			t.Errorf("generic image lacks %s:\n%s", tool, wb.Build.Inline)
+		}
+	}
+}

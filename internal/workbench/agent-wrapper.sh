@@ -1,37 +1,31 @@
 #!/bin/bash
-# orcasm agent wrapper: installed as <agent> (claude, codex, ...) ahead of the
-# real one on Orca's PATH. In a Worktree it runs the agent in that Worktree's
-# Workbench; anywhere else (Main) it runs the real agent here. See
-# docs/research/orca.md, "#16 spike", for why each step exists.
+# orcasm agent wrapper: installed in the Sandbox as /usr/local/bin/<agent>
+# (claude, codex, opencode), the real agents living in the harness layer
+# (/opt/orcasm/harness). In a Worktree it runs the agent in that Worktree's
+# Workbench, once its Stack is up; anywhere else (Main) it runs the real
+# agent here. See docs/research/orca.md, "#16 spike" and "#19", for why each
+# step exists.
 set -u
 agent=${0##*/}
-real=${ORCASM_AGENT_BIN_DIR:-/usr/local/bin}/$agent
-worktrees=${ORCASM_WORKTREES:-$HOME/orca/workspaces}
+real=${ORCASM_AGENT_BIN_DIR:-/opt/orcasm/harness/bin}/$agent
+worktrees=${ORCASM_WORKTREES:-/worktrees} # Orca's <worktrees>/<repo>/<worktree>
 
 case "$PWD/" in
-  "$worktrees"/*) ;;
+  "$worktrees"/*/*/*) ;;
   *) exec "$real" "$@" ;;
 esac
 
-# The Workbench is the running container labelled with the Worktree path
-# that holds $PWD (the longest one, should Worktrees ever nest).
-container= best=0
-while read -r id path; do
-  case "$PWD/" in
-    "$path"/*) if [ ${#path} -gt $best ]; then container=$id best=${#path}; fi ;;
-  esac
-done < <(docker ps --filter label=orcasm.worktree --format '{{.ID}} {{.Label "orcasm.worktree"}}')
-if [ -z "$container" ]; then
-  echo "orcasm: the Workbench of this Worktree is not running" >&2
-  exit 1
-fi
+# Waits for the Worktree's Stack, showing its build progress on stderr,
+# then names its running Workbench container.
+container=$(orcasm worktree workbench "$PWD") || exit 1
 
-# The Workbench mounts this copy of Orca's hook scripts over ~/.orca/agent-hooks.
-# Orca's hook server listens on the Sandbox's loopback only, so the copy POSTs
-# to $ORCASM_HOOK_HOST (the Sandbox's bridge address, relayed below). It also
-# drops the agent PID: that PID is from the Workbench's PID namespace, and
-# Orca, probing it in the Sandbox's, would mark the agent ended. Refreshed on
-# every launch, since Orca rewrites its scripts when it updates.
+# The Workbench mounts this copy of Orca's hook scripts over ~/.orca/agent-hooks
+# (stack.HookScriptsCopy). Orca's hook server listens on the Sandbox's
+# loopback only, so the copy POSTs to $ORCASM_HOOK_HOST, Docker's bridge,
+# where the orcasm-hook-relay unit forwards to Orca. It also drops the agent
+# PID: that PID is from the Workbench's PID namespace, and Orca, probing it
+# in the Sandbox's, would mark the agent ended. Refreshed on every launch,
+# since Orca rewrites its scripts when it starts.
 hooks=$HOME/.cache/orcasm/agent-hooks
 mkdir -p "$hooks"
 for f in "$HOME"/.orca/agent-hooks/*.sh; do
@@ -43,21 +37,31 @@ for f in "$HOME"/.orca/agent-hooks/*.sh; do
     chmod 755 "$tmp" && mv -f "$tmp" "$hooks/${f##*/}"
 done
 
-# Relay the bridge address to Orca's hook port. The endpoint file holds the
-# current port; a shell started before an Orca restart has a stale one.
-# The relay outlives this agent and serves every Workbench.
-port=${ORCA_AGENT_HOOK_PORT:-}
-if [ -r "${ORCA_AGENT_HOOK_ENDPOINT:-}" ]; then
-  port=$(sed -n 's/^ORCA_AGENT_HOOK_PORT=//p' "$ORCA_AGENT_HOOK_ENDPOINT")
-fi
-bridge=${ORCASM_BRIDGE_IP:-172.17.0.1}
-if [ -n "$port" ] && ! pgrep -f "TCP-LISTEN:$port,bind=$bridge," >/dev/null; then
-  setsid socat "TCP-LISTEN:$port,bind=$bridge,reuseaddr,fork" "TCP:127.0.0.1:$port" </dev/null >/dev/null 2>&1 &
+extra=()
+if [ "$agent" = opencode ]; then
+  # OpenCode reports through a plugin Orca writes into its config dir (or a
+  # per-launch overlay in $OPENCODE_CONFIG_DIR), posting to the loopback.
+  # The Workbench gets a copy of that dir posting to the bridge instead
+  # (stack.OpenCodeConfigCopy), one per running wrapper.
+  copies=$HOME/.cache/orcasm/opencode-config
+  mkdir -p "$copies"
+  for d in "$copies"/*; do
+    [ -d "$d" ] || continue
+    kill -0 "${d##*/}" 2>/dev/null || rm -rf "$d"
+  done
+  copy=$copies/$$
+  mkdir -p "$copy"
+  src=${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}
+  if [ -d "$src" ]; then cp -a "$src/." "$copy/"; fi
+  find "$copy" -type f \( -name '*.js' -o -name '*.mjs' -o -name '*.ts' \) -exec \
+    sed -i 's#http://127\.0\.0\.1:#http://${process.env.ORCASM_HOOK_HOST || "127.0.0.1"}:#g' {} +
+  extra+=(-e "OPENCODE_CONFIG_DIR=$copy")
 fi
 
-# The agent binary, at the same path in the Workbench (read-only mount of
-# the Sandbox's global npm modules). Claude Code's is native (glibc); Codex's
-# npm entry point is a Node script, so use its vendored static (musl) build.
+# The agent binary, at the same path in the Workbench (the harness layer is
+# mounted read-only). Claude Code's and OpenCode's are native (glibc);
+# Codex's npm entry point is a Node script, so use its vendored static
+# (musl) build.
 bin=$(readlink -f "$real")
 if [ "$agent" = codex ]; then
   case $(uname -m) in
@@ -83,4 +87,4 @@ if [ -t 0 ] && [ -t 1 ]; then tty=(-t); fi
 # Not exec: the PTY's foreground process stays this script, named <agent>,
 # which Orca recognizes; `docker` would not be.
 docker exec -i "${tty[@]}" -u "$(id -u):$(id -g)" -w "$PWD" -e HOME="$HOME" \
-  -e ORCASM_HOOK_HOST=host.docker.internal "${env_args[@]}" "$container" "$bin" "$@"
+  -e ORCASM_HOOK_HOST=host.docker.internal "${env_args[@]}" "${extra[@]}" "$container" "$bin" "$@"

@@ -58,7 +58,7 @@ func TestProvisionARealSandbox(t *testing.T) {
 
 	sb := msb.CLI{}.Sandbox(name)
 	checks := `pwd; stat -c %U "$PWD"; id -nG | tr ' ' '\n' | grep -x docker
-for c in git rsync curl gh claude codex opencode; do command -v $c >/dev/null || echo "missing $c"; done
+for c in git rsync curl gh /opt/orcasm/harness/bin/{claude,codex,opencode}; do command -v $c >/dev/null || echo "missing $c"; done
 docker run --rm hello-world >/dev/null && echo docker-ok
 env -i PATH=/usr/bin:/bin curl -fsS -o /dev/null https://github.com && echo tls-ok
 systemctl is-active orca; ps -o user= -C orca-ide | sort -u
