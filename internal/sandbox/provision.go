@@ -26,15 +26,12 @@ const (
 	OrcaVersion = "1.4.227"
 	// OrcaPort is the guest port `orca-ide serve` listens on.
 	OrcaPort = 6768
-	// Schema is the last migration a freshly provisioned Sandbox is at,
-	// recorded in the `orcasm.schema` label (ADR 0006). 0 = no migrations yet.
-	Schema = 0
 )
 
 // Labels Provision adds to CreateLabels.
 const (
 	LabelPort   = "orcasm.port"   // host port of Orca's web UI
-	LabelSchema = "orcasm.schema" // last applied migration
+	LabelSchema = "orcasm.schema" // last applied migration (migrate.go)
 )
 
 // CreateMSB is the slice of microsandbox Provision needs. msb.CLI
@@ -48,6 +45,12 @@ type CreateMSB interface {
 
 //go:embed provision.sh
 var provisionScript string
+
+// orcaFunctions defines the shell functions installing Orca and the
+// harnesses, shared with upgrades (orca.sh).
+//
+//go:embed orca.sh
+var orcaFunctions string
 
 // MainPath is where Main lives in the Sandbox for the Project at projectPath.
 // It exists (empty, owned by guest.User) once Provision returns, and is the
@@ -66,7 +69,7 @@ type SecretValue func(wizard.Secret) (string, error)
 //
 // cfg.Secrets become msb secrets, valued through secretValue; every later
 // `msb start` of the Sandbox needs those values again.
-func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue SecretValue, out io.Writer) error {
+func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, orcaVersion string, secretValue SecretValue, out io.Writer) error {
 	// Checked here, not just in the Wizard: a failed create is cleaned up
 	// with `msb rm`, which must never hit someone else's sandbox.
 	all, err := m.List(ctx)
@@ -81,7 +84,7 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	if err != nil {
 		return err
 	}
-	stackArgv, err := stackInstallArgv(main, cfg.Project.ComposeFiles)
+	wrappers, layer, err := orcasmLayer(cfg)
 	if err != nil {
 		return err
 	}
@@ -90,7 +93,8 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 		Name:  cfg.Name,
 		Labels: append(CreateLabels(cfg.ProjectPath, main),
 			msb.Label{Key: LabelPort, Value: strconv.Itoa(cfg.HostPort)},
-			msb.Label{Key: LabelSchema, Value: strconv.Itoa(Schema)}),
+			// Provisioning builds the latest shape: nothing to migrate.
+			msb.Label{Key: LabelSchema, Value: strconv.Itoa(Latest())}),
 		CPUs:        cfg.Resources.CPUs,
 		MemoryGiB:   cfg.Resources.MemoryGiB,
 		RootDiskGiB: cfg.Resources.RootDiskGiB,
@@ -108,24 +112,54 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 		_ = m.Remove(ctx, cfg.Name)
 		return fmt.Errorf("create Sandbox %s: %w", cfg.Name, err)
 	}
-	fmt.Fprintln(out, "==> Installing the agent wrappers")
-	if err := m.ExecStreaming(ctx, cfg.Name, "", out, agentsInstallArgv(cfg.Harnesses)...); err != nil {
-		return fmt.Errorf("install the agent wrappers in Sandbox %s: %w", cfg.Name, err)
+	if err := runSteps(ctx, m, cfg.Name, out, wrappers); err != nil {
+		return err
 	}
-	argv := append([]string{"bash", "-c", provisionScript, "provision",
-		guest.User, strconv.Itoa(cfg.HostPort), OrcaVersion, main, cfg.Git.Name, cfg.Git.Email},
+	argv := append([]string{"bash", "-c", orcaFunctions + provisionScript, "provision",
+		guest.User, strconv.Itoa(cfg.HostPort), orcaVersion, main, cfg.Git.Name, cfg.Git.Email},
 		cfg.Harnesses...)
 	if err := m.ExecStreaming(ctx, cfg.Name, "", out, argv...); err != nil {
 		return fmt.Errorf("provision Sandbox %s (kept for inspection; `msb rm --force %s` to discard): %w",
 			cfg.Name, cfg.Name, err)
 	}
-	fmt.Fprintln(out, "==> Installing the stack command for Main's Stack")
-	if err := m.ExecStreaming(ctx, cfg.Name, "", out, stackArgv...); err != nil {
-		return fmt.Errorf("install stack in Sandbox %s: %w", cfg.Name, err)
+	return runSteps(ctx, m, cfg.Name, out, layer...)
+}
+
+// step is one idempotent root install in a Sandbox.
+type step struct {
+	// progress is its "==>" line, and what its error says it failed to do.
+	progress, what string
+	argv           []string
+}
+
+// orcasmLayer is orcasm's own layer in a Sandbox, besides the orcasm binary
+// (InstallOrcasm): the agent wrappers, which must exist before Orca first
+// starts, then the stack command and the proxy. Provision installs it and
+// Upgrade reinstalls it.
+func orcasmLayer(cfg wizard.Config) (wrappers step, rest []step, err error) {
+	stackArgv, err := stackInstallArgv(MainPath(cfg.ProjectPath), cfg.Project.ComposeFiles)
+	if err != nil {
+		return step{}, nil, err
 	}
-	fmt.Fprintln(out, "==> Starting the proxy serving http://<worktree>.localhost")
-	if err := m.ExecStreaming(ctx, cfg.Name, "", out, proxyArgv()...); err != nil {
-		return fmt.Errorf("start the Worktree proxy in Sandbox %s: %w", cfg.Name, err)
+	return step{"Installing the agent wrappers", "install the agent wrappers", agentsInstallArgv(cfg.Harnesses)},
+		[]step{
+			{"Installing the stack command for Main's Stack", "install the stack command", stackArgv},
+			{"Starting the proxy serving http://<worktree>.localhost", "start the Worktree proxy", proxyArgv()},
+		}, nil
+}
+
+// streamer runs a command in a Sandbox with its output streamed to out.
+type streamer interface {
+	ExecStreaming(ctx context.Context, name, user string, out io.Writer, argv ...string) error
+}
+
+// runSteps runs steps as root in Sandbox name, in order.
+func runSteps(ctx context.Context, m streamer, name string, out io.Writer, steps ...step) error {
+	for _, s := range steps {
+		fmt.Fprintf(out, "==> %s\n", s.progress)
+		if err := m.ExecStreaming(ctx, name, "", out, s.argv...); err != nil {
+			return fmt.Errorf("%s in Sandbox %s: %w", s.what, name, err)
+		}
 	}
 	return nil
 }

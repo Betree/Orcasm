@@ -38,6 +38,7 @@ func NewRootCommand(info BuildInfo) *cobra.Command {
 	}
 	root.SetVersionTemplate(fmt.Sprintf("orcasm %s (commit %s, built %s)\n", info.Version, info.Commit, info.Date))
 	root.RunE = bareRun
+	root.PersistentPostRun = upgradeNotice(info)
 	for _, newCmd := range subcommands {
 		root.AddCommand(newCmd(info))
 	}

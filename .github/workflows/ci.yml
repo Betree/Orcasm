@@ -19,6 +19,8 @@ jobs:
       - name: gofmt
         run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
       - run: go vet ./...
+      # The end-to-end suite runs in e2e.yml; here it only has to compile.
+      - run: go vet -tags e2e ./e2e/
       # Tests tagged `msb` need KVM and a real msb, so they don't run here.
       - run: go test ./...
       - uses: goreleaser/goreleaser-action@v6

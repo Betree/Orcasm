@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"slices"
 	"strings"
@@ -22,12 +23,38 @@ type fakeSandbox struct {
 	orcaLog []string
 	// startSecrets are the secrets msb start last ran with.
 	startSecrets []msb.Secret
+	// orca is the installed orca-ide package version ("" = none), and
+	// agents how many agent processes run.
+	orca   string
+	agents int
 }
 
-// fakeMSB is an in-memory msb. Exec only knows how to read Orca's service log.
+// fakeMSB is an in-memory msb. Exec only knows how to read Orca's service
+// log, the installed Orca and the running agents (and runs git locally);
+// ExecStreaming and CopyIn only record what they are asked.
 type fakeMSB struct {
 	sandboxes map[string]*fakeSandbox
 	removed   []string
+	// labelWrites are the labels SetLabels wrote, in order.
+	labelWrites []string
+	// streamed are the ExecStreaming calls, copied the CopyIn ones
+	// ("name host -> guest").
+	streamed []execCall
+	copied   []string
+	// labelErr makes Labels fail for a Sandbox.
+	labelErr map[string]error
+	// execs are the Exec command lines.
+	execs []string
+}
+
+// execd is the last Exec command line containing s ("" if none).
+func (f *fakeMSB) execd(s string) string {
+	for i := len(f.execs) - 1; i >= 0; i-- {
+		if strings.Contains(f.execs[i], s) {
+			return f.execs[i]
+		}
+	}
+	return ""
 }
 
 func newFakeMSB() *fakeMSB { return &fakeMSB{sandboxes: map[string]*fakeSandbox{}} }
@@ -68,11 +95,27 @@ func (f *fakeMSB) List(_ context.Context, labels ...msb.Label) ([]msb.Listing, e
 }
 
 func (f *fakeMSB) Labels(_ context.Context, name string) (map[string]string, error) {
+	if err := f.labelErr[name]; err != nil {
+		return nil, err
+	}
 	sb, err := f.get(name)
 	if err != nil {
 		return nil, err
 	}
 	return sb.labels, nil
+}
+
+// SetLabels records each write in labelWrites ("name key=value").
+func (f *fakeMSB) SetLabels(_ context.Context, name string, labels ...msb.Label) error {
+	sb, err := f.get(name)
+	if err != nil {
+		return err
+	}
+	for _, l := range labels {
+		sb.labels[l.Key] = l.Value
+		f.labelWrites = append(f.labelWrites, name+" "+l.String())
+	}
+	return nil
 }
 
 func (f *fakeMSB) Start(_ context.Context, name string, secrets []msb.Secret) error {
@@ -116,7 +159,14 @@ func (f *fakeMSB) Exec(_ context.Context, name, _ string, argv ...string) (strin
 		out, err := exec.Command(argv[0], argv[1:]...).Output()
 		return string(out), err
 	}
-	if !strings.Contains(strings.Join(argv, " "), "journalctl") {
+	cmd := strings.Join(argv, " ")
+	f.execs = append(f.execs, cmd)
+	switch {
+	case strings.Contains(cmd, "dpkg-query"):
+		return sb.orca, nil
+	case strings.Contains(cmd, "pgrep"):
+		return fmt.Sprintf("%d\n", sb.agents), nil
+	case !strings.Contains(cmd, "journalctl"):
 		return "", fmt.Errorf("fake msb cannot run %q", argv)
 	}
 	if sb.status != msb.Running || len(sb.orcaLog) == 0 {
@@ -129,8 +179,41 @@ func (f *fakeMSB) Exec(_ context.Context, name, _ string, argv ...string) (strin
 	return log, nil
 }
 
-func (f *fakeMSB) CopyIn(context.Context, string, string, string) error {
-	return errors.New("fake msb cannot copy files")
+func (f *fakeMSB) CopyIn(_ context.Context, name, hostPath, guestPath string) error {
+	if _, err := f.get(name); err != nil {
+		return err
+	}
+	f.copied = append(f.copied, name+" "+hostPath+" -> "+guestPath)
+	return nil
+}
+
+func (f *fakeMSB) ExecStreaming(_ context.Context, name, user string, _ io.Writer, argv ...string) error {
+	if _, err := f.get(name); err != nil {
+		return err
+	}
+	f.streamed = append(f.streamed, execCall{name, user, argv})
+	return nil
+}
+
+// scripts are the names ($0) of the root bash scripts ExecStreaming ran.
+func (f *fakeMSB) scripts() []string {
+	var out []string
+	for _, e := range f.streamed {
+		if len(e.argv) > 3 && e.argv[0] == "bash" && e.argv[1] == "-c" && e.user == "" {
+			out = append(out, e.argv[3])
+		}
+	}
+	return out
+}
+
+// script is the ExecStreaming call of the script named name, if any.
+func (f *fakeMSB) script(name string) (execCall, bool) {
+	for _, e := range f.streamed {
+		if len(e.argv) > 3 && e.argv[0] == "bash" && e.argv[3] == name {
+			return e, true
+		}
+	}
+	return execCall{}, false
 }
 
 func names(sbs []sandbox.Sandbox) []string {

@@ -64,6 +64,19 @@ func (c CLI) Labels(ctx context.Context, name string) (map[string]string, error)
 	return inspect.Config.Labels, nil
 }
 
+// SetLabels adds or replaces the given labels, keeping the others, whether
+// the sandbox runs or not. msb refuses label changes on a running sandbox
+// unless asked to restart it (which would kill agent sessions) or to save them
+// for the next start; with the latter, verified on 0.7.8, `msb inspect` and
+// `msb list --label` see the new value at once, and it survives restarts.
+func (c CLI) SetLabels(ctx context.Context, name string, labels ...Label) error {
+	args := []string{"modify", name, "--next-start"}
+	for _, l := range labels {
+		args = append(args, "--label", l.String())
+	}
+	return c.run(ctx, call{args: args})
+}
+
 // Start boots a stopped sandbox. msb reads secret values from host variables
 // at each start, so secrets gives the value of every secret the sandbox was
 // created with. msb refuses a sandbox that is already running.

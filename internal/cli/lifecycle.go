@@ -49,7 +49,7 @@ func newManager() (sandbox.Manager, error) {
 		}
 		return sandbox.Secrets(dir, name, host.SecretValue)
 	}
-	return sandbox.Manager{MSB: msb.CLI{}, SSH: ssh, ConfigDir: dir, StartSecrets: startSecrets}, nil
+	return sandbox.Manager{MSB: msb.CLI{}, SSH: ssh, Labels: msb.CLI{}, Installer: msb.CLI{}, ConfigDir: dir, StartSecrets: startSecrets}, nil
 }
 
 // sandboxArg is the Sandbox named in args or, without one, the current

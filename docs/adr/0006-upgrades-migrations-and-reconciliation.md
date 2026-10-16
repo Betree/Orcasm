@@ -5,4 +5,5 @@ Orca releases every few days and orcasm depends on its internals, while recreati
 ## Consequences
 
 - CI must track Orca releases and run the end-to-end suite (driven by the Wizard's hidden answers file) from day one.
+- CI commits the compatibility file straight to `main` (`.github/workflows/orca-watch.yml`), so `main` must let GitHub Actions push: workflow permissions set to read and write, and no branch protection or ruleset requiring pull requests or checks on `main` without a bypass for GitHub Actions.
 - Upgrades confirm before restarting Orca (it kills agent sessions); Workbenches are recreated lazily on next use, never mid-task.

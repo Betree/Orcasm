@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -69,7 +70,7 @@ func demoConfig() wizard.Config {
 
 func TestProvisionCreatesTheSandboxFromTheWizardConfig(t *testing.T) {
 	f := &fakeCreateMSB{}
-	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard); err != nil {
+	if err := sandbox.Provision(context.Background(), f, demoConfig(), sandbox.OrcaVersion, hostValues, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	want := msb.CreateOptions{
@@ -96,10 +97,26 @@ func TestProvisionCreatesTheSandboxFromTheWizardConfig(t *testing.T) {
 	}
 }
 
+func TestANewSandboxStartsWithEveryMigrationApplied(t *testing.T) {
+	r := &recorder{}
+	defer sandbox.SetMigrations([]sandbox.Migration{r.migration(1, "1"), r.migration(2, "2")})()
+	f := &fakeCreateMSB{}
+	if err := sandbox.Provision(context.Background(), f, demoConfig(), sandbox.OrcaVersion, hostValues, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.created) != 1 || !slices.Contains(f.created[0].Labels, msb.Label{Key: "orcasm.schema", Value: "2"}) {
+		t.Errorf("created %+v, want the label orcasm.schema=2", f.created)
+	}
+	if len(r.ran) != 0 {
+		t.Errorf("ran migrations %q on a new Sandbox", r.ran)
+	}
+}
+
+// The Orca release comes from the caller (the compatibility file).
 func TestProvisionRunsTheProvisioningScriptAsRoot(t *testing.T) {
 	f := &fakeCreateMSB{}
 	var out strings.Builder
-	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, &out); err != nil {
+	if err := sandbox.Provision(context.Background(), f, demoConfig(), "1.4.230", hostValues, &out); err != nil {
 		t.Fatal(err)
 	}
 	var c execCall
@@ -115,7 +132,7 @@ func TestProvisionRunsTheProvisioningScriptAsRoot(t *testing.T) {
 	if c.name != "demo" || c.user != "" {
 		t.Errorf("exec in %q as %q, want demo as root", c.name, c.user)
 	}
-	wantArgs := []string{"provision", "dev", "6769", "1.4.227", "/home/dev/demo",
+	wantArgs := []string{"provision", "dev", "6769", "1.4.230", "/home/dev/demo",
 		"Ada Lovelace", "ada@example.com", "claude", "codex"}
 	if got := c.argv[3:]; !reflect.DeepEqual(got, wantArgs) {
 		t.Errorf("script args %q, want %q", got, wantArgs)
@@ -127,7 +144,7 @@ func TestProvisionRunsTheProvisioningScriptAsRoot(t *testing.T) {
 
 func TestProvisionReportsAFailedProvisioning(t *testing.T) {
 	f := &fakeCreateMSB{execErr: errors.New("apt-get exploded")}
-	err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard)
+	err := sandbox.Provision(context.Background(), f, demoConfig(), sandbox.OrcaVersion, hostValues, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "apt-get exploded") || !strings.Contains(err.Error(), "demo") {
 		t.Fatalf("want error naming the Sandbox and the cause, got %v", err)
 	}
@@ -140,7 +157,7 @@ func TestProvisionHandsApprovedSecretsToMSBWithTheirHostValues(t *testing.T) {
 		Name: "GH_TOKEN", Hosts: []string{"github.com", "api.github.com"},
 		Source: wizard.Source{Command: []string{"gh", "auth", "token"}},
 	}}
-	if err := sandbox.Provision(context.Background(), f, cfg, hostValues, io.Discard); err != nil {
+	if err := sandbox.Provision(context.Background(), f, cfg, sandbox.OrcaVersion, hostValues, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	want := []msb.Secret{{Name: "GH_TOKEN", Hosts: []string{"github.com", "api.github.com"}, Value: "ghp_from_host"}}
@@ -153,7 +170,7 @@ func TestProvisionStopsBeforeCreatingWhenASecretHasNoValue(t *testing.T) {
 	f := &fakeCreateMSB{}
 	cfg := demoConfig()
 	cfg.Secrets = []wizard.Secret{{Name: "OPENAI_API_KEY", Hosts: []string{"api.openai.com"}}}
-	err := sandbox.Provision(context.Background(), f, cfg, hostValues, io.Discard)
+	err := sandbox.Provision(context.Background(), f, cfg, sandbox.OrcaVersion, hostValues, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
 		t.Fatalf("want an error naming the secret, got %v", err)
 	}
@@ -165,7 +182,7 @@ func TestProvisionStopsBeforeCreatingWhenASecretHasNoValue(t *testing.T) {
 // A failed `msb create` leaves a stopped record behind that blocks the name.
 func TestProvisionRemovesTheSandboxRecordWhenCreateFails(t *testing.T) {
 	f := &fakeCreateMSB{createErr: errors.New("boom")}
-	err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard)
+	err := sandbox.Provision(context.Background(), f, demoConfig(), sandbox.OrcaVersion, hostValues, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("want the create error, got %v", err)
 	}
@@ -179,7 +196,7 @@ func TestProvisionRemovesTheSandboxRecordWhenCreateFails(t *testing.T) {
 
 func TestProvisionNeverTouchesAnExistingSandbox(t *testing.T) {
 	f := &fakeCreateMSB{existing: []msb.Listing{{Name: "oc-dev"}, {Name: "demo"}}, createErr: errors.New("already exists")}
-	err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, io.Discard)
+	err := sandbox.Provision(context.Background(), f, demoConfig(), sandbox.OrcaVersion, hostValues, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "demo") {
 		t.Fatalf("want an error naming the taken name, got %v", err)
 	}

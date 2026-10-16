@@ -18,8 +18,9 @@ import (
 
 func init() { register(newCreateCmd) }
 
-// create builds the Sandbox from the Wizard's Config; tests swap it out.
-var create = func(ctx context.Context, cfg wizard.Config, secretValue sandbox.SecretValue, out io.Writer) error {
+// create builds the Sandbox from the Wizard's Config with this orcasm (of
+// version info.Version); tests swap it out.
+var create = func(ctx context.Context, info BuildInfo, cfg wizard.Config, secretValue sandbox.SecretValue, out io.Writer) error {
 	ssh, err := sshaccess.Default(msb.CLI{})
 	if err != nil {
 		return err
@@ -32,10 +33,16 @@ var create = func(ctx context.Context, cfg wizard.Config, secretValue sandbox.Se
 	if err != nil {
 		return err
 	}
-	return sandbox.NewCreator(msb.CLI{}, ssh, secretValue, dir, guestBinary).Create(ctx, cfg, out)
+	orca, err := sandbox.NewOrcaSource(info.Version).Desired(ctx, false)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "==> Using Orca %s (%s)\n", orca.Version, orca.From)
+	installs := sandbox.Installed{Orca: orca.Version, Orcasm: info.Version}
+	return sandbox.NewCreator(msb.CLI{}, ssh, secretValue, dir, guestBinary, installs).Create(ctx, cfg, out)
 }
 
-func newCreateCmd(BuildInfo) *cobra.Command {
+func newCreateCmd(info BuildInfo) *cobra.Command {
 	var answersFile string
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -68,7 +75,7 @@ func newCreateCmd(BuildInfo) *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			printSummary(out, cfg)
-			if err := create(cmd.Context(), cfg, host.SecretValue, out); err != nil {
+			if err := create(cmd.Context(), info, cfg, host.SecretValue, out); err != nil {
 				return err
 			}
 			fmt.Fprintf(out, "Sandbox %s is ready. Orca's web UI is served on http://127.0.0.1:%d/ (`orcasm url %s` prints the link that pairs a browser)\n",

@@ -41,12 +41,56 @@ func LoadConfig(dir, name string) (wizard.Config, error) {
 	return cfg, nil
 }
 
-// RemoveConfig forgets Sandbox name's Config; it is a no-op if there is none.
+// RemoveConfig forgets Sandbox name's Config and Installed record; it is a
+// no-op if there are none.
 func RemoveConfig(dir, name string) error {
-	if err := os.Remove(configPath(dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	for _, p := range []string{configPath(dir, name), installedPath(dir, name)} {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
 	}
 	return nil
+}
+
+// Installed records, on the host, what create and upgrade last installed in
+// a Sandbox, so the daily upgrade notice can tell an upgrade is pending
+// without exec'ing into it (which boots a stopped one). It lives next to the
+// Config, in <dir>/<name>.installed.toml.
+type Installed struct {
+	// Orca is the Orca release (orca-ide package version).
+	Orca string `toml:"orca"`
+	// Orcasm is the version of the orcasm installed in it, which also
+	// generates its Workbench layer (internal/stack): that of the host
+	// orcasm that installed it, whose binary it is on Linux hosts.
+	Orcasm string `toml:"orcasm,omitempty"`
+}
+
+func installedPath(dir, name string) string { return filepath.Join(dir, name+".installed.toml") }
+
+// SaveInstalled records what is installed in Sandbox name.
+func SaveInstalled(dir, name string, in Installed) error {
+	var buf bytes.Buffer
+	if err := toml.NewEncoder(&buf).Encode(in); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(installedPath(dir, name), buf.Bytes(), 0o600)
+}
+
+// LoadInstalled reads what is recorded as installed in Sandbox name; with no
+// record (a Sandbox made before it existed) nothing is.
+func LoadInstalled(dir, name string) (Installed, error) {
+	var in Installed
+	_, err := toml.DecodeFile(installedPath(dir, name), &in)
+	if errors.Is(err, os.ErrNotExist) {
+		return Installed{}, nil
+	}
+	if err != nil {
+		return Installed{}, fmt.Errorf("installed versions of Sandbox %s: %w", name, err)
+	}
+	return in, nil
 }
 
 // Secrets are the secrets `msb start` needs for Sandbox name: each kept

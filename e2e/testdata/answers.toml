@@ -1,0 +1,28 @@
+# The Wizard's answers for the end-to-end suite (`orcasm create --answers`).
+# Templated fields are filled in by e2e_test.go; the rest is sized for a
+# standard GitHub-hosted runner (4 vCPU, 16 GiB).
+project_path = "{{.ProjectPath}}"
+name = "{{.Name}}"
+host_port = {{.HostPort}}
+# Only `--version` is run: no sign-in is needed.
+harnesses = ["claude"]
+
+[resources]
+cpus = 2
+memory_gib = 6
+root_disk_gib = 16
+docker_disk_gib = 20
+
+[project]
+compose_files = ["compose.yml"]
+web_service = "web"
+web_port = 80
+
+# A dummy token, to exercise msb's TLS interception: its value never
+# reaches the Sandbox.
+[[secrets]]
+name = "GEMINI_API_KEY"
+
+[git]
+name = "Orcasm E2E"
+email = "e2e@example.com"

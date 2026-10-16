@@ -1,0 +1,129 @@
+# The end-to-end suite (e2e/, ADR 0006): a real Sandbox driven through the
+# orcasm binary. Too slow for every PR, so it runs nightly on main, by hand,
+# and from the Orca release watcher (orca-watch.yml) on each new Orca.
+#
+# The suite, its fixtures and the scripts always come from the triggering
+# ref (main for the nightly run and the watcher): an older orcasm release
+# under test (`ref`) predates them. Only the orcasm binary is built from
+# `ref`, stamped with its version as GoReleaser does.
+#
+# Every run upgrades a Sandbox: it is created with `from_orca_version` (by
+# default the Orca release just before `orca_version`), then `orcasm
+# upgrade` moves it to `orca_version`, through migrations, the
+# reconciliation and Orca's restart.
+name: e2e
+
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      orca_version:
+        description: Orca release under test (empty for the newest the compatibility file lists)
+        type: string
+        required: false
+      from_orca_version:
+        description: Orca release to create the Sandbox with before upgrading to orca_version (empty for the release before it; orca_version itself for no Orca upgrade)
+        type: string
+        required: false
+      ref:
+        description: orcasm ref (tag or branch) whose binary is tested (empty for the triggering one)
+        type: string
+        required: false
+  workflow_call:
+    inputs:
+      orca_version:
+        type: string
+        required: false
+      from_orca_version:
+        type: string
+        required: false
+      ref:
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Check out the orcasm under test
+        if: inputs.ref != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          path: under-test
+      - name: Build the orcasm under test
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          src=.
+          version=dev
+          if [ -n "$REF" ]; then
+            src=under-test
+            # A release tag stamps its version, as GoReleaser does; the
+            # compatibility file then picks Orca as that release would.
+            case "$REF" in v[0-9]*) version=${REF#v} ;; esac
+          fi
+          # GOTOOLCHAIN=auto fetches the Go an older ref's go.mod asks for.
+          (cd "$src" && GOTOOLCHAIN=auto go build -ldflags "-X main.version=$version -X main.commit=$(git rev-parse --short HEAD)" \
+            -o "$RUNNER_TEMP/orcasm" ./cmd/orcasm)
+          "$RUNNER_TEMP/orcasm" --version
+      - name: Pick the Orca releases
+        id: orca
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ORCA: ${{ inputs.orca_version }}
+          FROM: ${{ inputs.from_orca_version }}
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/compatfile" ./internal/compat/compatfile
+          orca=${ORCA:-$("$RUNNER_TEMP/compatfile" newest compatibility.json)}
+          orca=${orca#v}
+          from=${FROM#v}
+          if [ -z "$from" ]; then
+            # The newest Orca release older than $orca (itself when none is):
+            # GitHub's releases, without drafts, pre-releases and tags that
+            # are not plain versions (mobile-android-v*).
+            from=$({
+              echo "$orca"
+              gh api 'repos/stablyai/orca/releases?per_page=100' --jq '.[] | select((.draft or .prerelease) | not) | .tag_name' |
+                sed -n 's/^v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p'
+            } | sort -uV | grep -B1 -xF "$orca" | head -n1)
+          fi
+          echo "Upgrading a Sandbox from Orca $from to Orca $orca."
+          {
+            echo "orca=$orca"
+            echo "from=$from"
+          } >>"$GITHUB_OUTPUT"
+      # msb boots Sandboxes with KVM, which standard Linux runners expose
+      # once the runner user may open /dev/kvm.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      # The msb the orcasm under test pins, with this ref's installer.
+      - name: Install the pinned msb
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          pinned=$(sed -n 's/^const PinnedVersion = "\(.*\)"$/\1/p' "${REF:+under-test/}internal/msb/version.go")
+          internal/msb/install-msb.sh "$pinned"
+      - name: End-to-end suite
+        env:
+          ORCASM_E2E: "1"
+          ORCASM_E2E_BINARY: ${{ runner.temp }}/orcasm
+          ORCASM_E2E_ORCA: ${{ steps.orca.outputs.orca }}
+          ORCASM_E2E_FROM_ORCA: ${{ steps.orca.outputs.from }}
+          ORCASM_E2E_NAME: e2e-${{ github.run_id }}-${{ github.run_attempt }}
+        run: go test -tags e2e -timeout 50m -v ./e2e/

@@ -1,0 +1,96 @@
+package sandbox_test
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+
+	"github.com/Betree/Orcasm/internal/sandbox"
+)
+
+// orcaServer publishes a compatibility file and Orca's latest release.
+func orcaServer(t *testing.T, file string) sandbox.OrcaSource {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/compatibility.json", func(w http.ResponseWriter, _ *http.Request) {
+		if file == "" {
+			http.Error(w, "gone", http.StatusInternalServerError)
+			return
+		}
+		w.Write([]byte(file))
+	})
+	mux.HandleFunc("/latest", func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(`{"tag_name": "v1.4.240"}`))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return sandbox.OrcaSource{Client: srv.Client(), FileURL: srv.URL + "/compatibility.json", LatestURL: srv.URL + "/latest", Orcasm: "0.2.0"}
+}
+
+func TestTheDesiredOrcaIsTheNewestTestedWithThisOrcasm(t *testing.T) {
+	src := orcaServer(t, `{"orca": [{"version": "1.4.230", "min_orcasm": "0.2.0"}, {"version": "1.4.235", "min_orcasm": "0.3.0"}]}`)
+
+	t0, err := src.Desired(context.Background(), false)
+	got, from := t0.Version, t0.From
+	if err != nil || got != "1.4.230" {
+		t.Errorf("Desired = %q, %v; want 1.4.230", got, err)
+	}
+	if !strings.Contains(from, "compatibility file") {
+		t.Errorf("from = %q", from)
+	}
+}
+
+func TestOfflineTheDesiredOrcaIsTheOneBuiltIntoOrcasm(t *testing.T) {
+	src := orcaServer(t, "")
+
+	t0, err := src.Desired(context.Background(), false)
+	got, from := t0.Version, t0.From
+	if err != nil || got != sandbox.OrcaVersion {
+		t.Errorf("Desired = %q, %v; want %s", got, err, sandbox.OrcaVersion)
+	}
+	if !strings.Contains(from, "built in") {
+		t.Errorf("from = %q, want it to say the version is built in", from)
+	}
+}
+
+func TestWithNoOrcaTestedWithThisOrcasmTheBuiltInOneIsDesired(t *testing.T) {
+	src := orcaServer(t, `{"orca": [{"version": "1.4.235", "min_orcasm": "0.3.0"}]}`)
+
+	if got, err := src.Desired(context.Background(), false); err != nil || got.Version != sandbox.OrcaVersion {
+		t.Errorf("Desired = %q, %v; want %s", got, err, sandbox.OrcaVersion)
+	}
+}
+
+func TestTheOrcaVersionOverrideWinsOverTheCompatibilityFileAndLatest(t *testing.T) {
+	// The end-to-end suite tests an Orca release before the compatibility
+	// file lists it (#24).
+	t.Setenv("ORCASM_ORCA_VERSION", "1.4.250")
+	src := sandbox.NewOrcaSource("0.2.0")
+	src.FileURL, src.LatestURL = "http://127.0.0.1:1/unreachable", "http://127.0.0.1:1/unreachable"
+
+	for _, latest := range []bool{false, true} {
+		t0, err := src.Desired(context.Background(), latest)
+		got, from := t0.Version, t0.From
+		if err != nil || got != "1.4.250" {
+			t.Errorf("Desired(latest=%v) = %q, %v; want 1.4.250", latest, got, err)
+		}
+		if !strings.Contains(from, "ORCASM_ORCA_VERSION") {
+			t.Errorf("from = %q, want it to name the override", from)
+		}
+	}
+}
+
+func TestLatestBypassesTheCompatibilityFile(t *testing.T) {
+	src := orcaServer(t, `{"orca": [{"version": "1.4.230", "min_orcasm": "0.0.0"}]}`)
+
+	t0, err := src.Desired(context.Background(), true)
+	got, from := t0.Version, t0.From
+	if err != nil || got != "1.4.240" {
+		t.Errorf("Desired = %q, %v; want 1.4.240", got, err)
+	}
+	if !strings.Contains(from, "latest") {
+		t.Errorf("from = %q", from)
+	}
+}

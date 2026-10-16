@@ -43,7 +43,7 @@ func TestProvisionARealSandbox(t *testing.T) {
 	}
 	value := func(wizard.Secret) (string, error) { return "not-a-real-token", nil }
 
-	if err := sandbox.Provision(ctx, msb.CLI{}, cfg, value, testWriter{t}); err != nil {
+	if err := sandbox.Provision(ctx, msb.CLI{}, cfg, sandbox.OrcaVersion, value, testWriter{t}); err != nil {
 		t.Fatal(err)
 	}
 
