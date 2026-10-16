@@ -10,7 +10,7 @@ import (
 	"github.com/Betree/Orcasm/internal/hostport"
 )
 
-// RealHost probes the machine orcasm runs on.
+// RealHost probes the host orcasm runs on.
 type RealHost struct{}
 
 func (RealHost) OS() string { return runtime.GOOS }

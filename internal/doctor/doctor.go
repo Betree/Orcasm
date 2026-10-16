@@ -10,7 +10,7 @@ import (
 	"github.com/Betree/Orcasm/internal/msb"
 )
 
-// Host is what doctor probes. RealHost probes the machine it runs on.
+// Host is what doctor probes. RealHost probes the host it runs on.
 type Host interface {
 	OS() string
 	OpenKVM() error

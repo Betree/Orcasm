@@ -15,13 +15,13 @@ import (
 
 // fakeSandbox is one sandbox in fakeMSB.
 type fakeSandbox struct {
-	status string
+	status msb.Status
 	labels map[string]string
 	// orcaLog is what the current run of the Orca service has logged, as
 	// successive reads of the log see it (the last entry repeats).
 	orcaLog []string
-	// startEnv is the extra environment msb start last ran with.
-	startEnv []string
+	// startSecrets are the secrets msb start last ran with.
+	startSecrets []msb.Secret
 }
 
 // fakeMSB is an in-memory msb. Exec only knows how to read Orca's service log.
@@ -32,7 +32,7 @@ type fakeMSB struct {
 
 func newFakeMSB() *fakeMSB { return &fakeMSB{sandboxes: map[string]*fakeSandbox{}} }
 
-func (f *fakeMSB) add(name, status string, labels ...string) *fakeSandbox {
+func (f *fakeMSB) add(name string, status msb.Status, labels ...string) *fakeSandbox {
 	sb := &fakeSandbox{status: status, labels: map[string]string{}}
 	for _, l := range labels {
 		k, v, _ := strings.Cut(l, "=")
@@ -50,13 +50,12 @@ func (f *fakeMSB) get(name string) (*fakeSandbox, error) {
 	return sb, nil
 }
 
-func (f *fakeMSB) List(_ context.Context, labels ...string) ([]msb.Listing, error) {
+func (f *fakeMSB) List(_ context.Context, labels ...msb.Label) ([]msb.Listing, error) {
 	var out []msb.Listing
 	for name, sb := range f.sandboxes {
 		match := true
 		for _, l := range labels {
-			k, v, _ := strings.Cut(l, "=")
-			if got, ok := sb.labels[k]; !ok || got != v {
+			if got, ok := sb.labels[l.Key]; !ok || got != l.Value {
 				match = false
 			}
 		}
@@ -76,7 +75,7 @@ func (f *fakeMSB) Labels(_ context.Context, name string) (map[string]string, err
 	return sb.labels, nil
 }
 
-func (f *fakeMSB) Start(_ context.Context, name string, env []string) error {
+func (f *fakeMSB) Start(_ context.Context, name string, secrets []msb.Secret) error {
 	sb, err := f.get(name)
 	if err != nil {
 		return err
@@ -85,7 +84,7 @@ func (f *fakeMSB) Start(_ context.Context, name string, env []string) error {
 		return fmt.Errorf("cannot start sandbox '%s': already running", name)
 	}
 	sb.status = msb.Running
-	sb.startEnv = env
+	sb.startSecrets = secrets
 	return nil
 }
 
@@ -130,6 +129,10 @@ func (f *fakeMSB) Exec(_ context.Context, name, _ string, argv ...string) (strin
 	return log, nil
 }
 
+func (f *fakeMSB) CopyIn(context.Context, string, string, string) error {
+	return errors.New("fake msb cannot copy files")
+}
+
 func names(sbs []sandbox.Sandbox) []string {
 	var out []string
 	for _, s := range sbs {
@@ -140,8 +143,8 @@ func names(sbs []sandbox.Sandbox) []string {
 
 func TestListShowsOnlyOrcasmSandboxes(t *testing.T) {
 	f := newFakeMSB()
-	f.add("app", msb.Running, "orcasm=1", "orcasm.folder=/home/me/app")
-	f.add("app-2", msb.Stopped, "orcasm=1", "orcasm.folder=/home/me/app")
+	f.add("app", msb.Running, "orcasm=1", "orcasm.project=/home/me/app")
+	f.add("app-2", msb.Stopped, "orcasm=1", "orcasm.project=/home/me/app")
 	f.add("oc-dev", msb.Running, "team=platform")
 
 	got, err := sandbox.Manager{MSB: f}.List(context.Background())
@@ -150,8 +153,8 @@ func TestListShowsOnlyOrcasmSandboxes(t *testing.T) {
 	}
 
 	want := []sandbox.Sandbox{
-		{Name: "app", Status: msb.Running, Folder: "/home/me/app"},
-		{Name: "app-2", Status: msb.Stopped, Folder: "/home/me/app"},
+		{Name: "app", Status: msb.Running, ProjectPath: "/home/me/app"},
+		{Name: "app-2", Status: msb.Stopped, ProjectPath: "/home/me/app"},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("List = %+v, want %+v", got, want)
@@ -160,16 +163,16 @@ func TestListShowsOnlyOrcasmSandboxes(t *testing.T) {
 
 func TestInFolderFindsTheFoldersSandboxes(t *testing.T) {
 	f := newFakeMSB()
-	f.add("app", msb.Running, "orcasm=1", "orcasm.folder=/home/me/app")
-	f.add("other", msb.Running, "orcasm=1", "orcasm.folder=/home/me/other")
+	f.add("app", msb.Running, "orcasm=1", "orcasm.project=/home/me/app")
+	f.add("other", msb.Running, "orcasm=1", "orcasm.project=/home/me/other")
 
-	got, err := sandbox.Manager{MSB: f}.InFolder(context.Background(), "/home/me/app")
+	got, err := sandbox.Manager{MSB: f}.InProject(context.Background(), "/home/me/app")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if !slices.Equal(names(got), []string{"app"}) {
-		t.Errorf("InFolder = %v, want [app]", names(got))
+		t.Errorf("InProject = %v, want [app]", names(got))
 	}
 }
 
@@ -186,26 +189,26 @@ func TestStartBootsAStoppedSandbox(t *testing.T) {
 	}
 }
 
-func TestStartHandsMSBTheSandboxSecretEnv(t *testing.T) {
+func TestStartHandsMSBTheSandboxSecrets(t *testing.T) {
 	f := newFakeMSB()
 	f.add("app", msb.Stopped, "orcasm=1")
-	m := sandbox.Manager{MSB: f, StartEnv: func(_ context.Context, name string) ([]string, error) {
-		return []string{"ORCASM_SECRET_" + strings.ToUpper(name) + "=token"}, nil
+	m := sandbox.Manager{MSB: f, StartSecrets: func(_ context.Context, name string) ([]msb.Secret, error) {
+		return []msb.Secret{{Name: "ORCASM_SECRET_" + strings.ToUpper(name), Value: "token"}}, nil
 	}}
 
 	if err := m.Start(context.Background(), "app"); err != nil {
 		t.Fatal(err)
 	}
 
-	if got := f.sandboxes["app"].startEnv; !slices.Equal(got, []string{"ORCASM_SECRET_APP=token"}) {
-		t.Errorf("start env = %q", got)
+	if got := f.sandboxes["app"].startSecrets; len(got) != 1 || got[0].Name != "ORCASM_SECRET_APP" || got[0].Value != "token" {
+		t.Errorf("start secrets = %+v", got)
 	}
 }
 
 func TestStartWithoutSecretValuesDoesNotStart(t *testing.T) {
 	f := newFakeMSB()
 	f.add("app", msb.Stopped, "orcasm=1")
-	m := sandbox.Manager{MSB: f, StartEnv: func(context.Context, string) ([]string, error) {
+	m := sandbox.Manager{MSB: f, StartSecrets: func(context.Context, string) ([]msb.Secret, error) {
 		return nil, errors.New("no token for ANTHROPIC_API_KEY on this host")
 	}}
 
@@ -259,4 +262,12 @@ func TestLifecycleRefusesSandboxesOrcasmDidNotMake(t *testing.T) {
 	if f.sandboxes["oc-dev"].status != msb.Running || len(f.removed) != 0 {
 		t.Error("touched a sandbox orcasm did not make")
 	}
+}
+
+func labelStrings(labels []msb.Label) []string {
+	var out []string
+	for _, l := range labels {
+		out = append(out, l.String())
+	}
+	return out
 }

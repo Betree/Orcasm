@@ -159,13 +159,13 @@ func availableSecrets(h Host) []Secret {
 	return out
 }
 
-// hostGitIdentity is the git identity configured for folder on the host.
-func hostGitIdentity(h Host, folder string) GitIdentity {
+// hostGitIdentity is the git identity configured for projectPath on the host.
+func hostGitIdentity(h Host, projectPath string) GitIdentity {
 	get := func(key string) string {
 		if h.Output == nil {
 			return ""
 		}
-		out, err := h.Output("git", "-C", folder, "config", key)
+		out, err := h.Output("git", "-C", projectPath, "config", key)
 		if err != nil {
 			return ""
 		}

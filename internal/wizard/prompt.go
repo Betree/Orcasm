@@ -43,14 +43,14 @@ func isTerminal(r io.Reader) bool {
 	return ok && term.IsTerminal(int(f.Fd()))
 }
 
-func (p prompter) folder(folder *string) error {
+func (p prompter) projectPath(projectPath *string) error {
 	return p.run(huh.NewGroup(
-		huh.NewInput().Title("Project folder").Value(folder),
+		huh.NewInput().Title("Project path").Value(projectPath),
 	))
 }
 
-// sandbox asks for everything but the Project folder. s lists what was found
-// in the folder; available harnesses are those on the host.
+// sandbox asks for everything but the Project. s lists what was found
+// in the projectPath; available harnesses are those on the host.
 func (p prompter) sandbox(cfg *Config, h Host, s scan) error {
 	cpus := strconv.Itoa(cfg.Resources.CPUs)
 	mem := strconv.Itoa(cfg.Resources.MemoryGiB)
@@ -79,7 +79,7 @@ func (p prompter) sandbox(cfg *Config, h Host, s scan) error {
 	cfg.HostPort = atoi(port)
 
 	var project []huh.Field
-	services, _ := composeServices(cfg.Folder, cfg.Project.ComposeFiles)
+	services, _ := composeServices(cfg.ProjectPath, cfg.Project.ComposeFiles)
 	if len(services) > 0 {
 		webPort := ""
 		if cfg.Project.WebPort > 0 {
@@ -153,6 +153,14 @@ func (p prompter) share(cfg *Config, secrets []Secret, git GitIdentity) error {
 		}
 	}
 	return nil
+}
+
+// linkSSHConfig asks for consent to add orcasm's Include to ~/.ssh/config.
+func (p prompter) linkSSHConfig(link *bool) error {
+	return p.run(huh.NewGroup(huh.NewConfirm().
+		Title("Add one Include line to ~/.ssh/config so VS Code Remote-SSH lists your Sandboxes?").
+		Description("`orcasm ssh` and the orcasm-<name> git remote work either way.").
+		Value(link)))
 }
 
 // isInt accepts a number, or nothing: in line-by-line mode an empty answer

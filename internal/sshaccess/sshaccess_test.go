@@ -1,6 +1,7 @@
 package sshaccess_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,7 @@ type fakeMSB struct {
 	hostKeys   map[string]string
 }
 
-func (f *fakeMSB) AuthorizeSSHKey(pubKeyFile string) error {
+func (f *fakeMSB) AuthorizeSSHKey(_ context.Context, pubKeyFile string) error {
 	b, err := os.ReadFile(pubKeyFile)
 	if err != nil {
 		return err
@@ -29,7 +30,7 @@ func (f *fakeMSB) AuthorizeSSHKey(pubKeyFile string) error {
 	return nil
 }
 
-func (f *fakeMSB) SandboxHostKey(name string) (string, error) {
+func (f *fakeMSB) SandboxHostKey(_ context.Context, name string) (string, error) {
 	if k, ok := f.hostKeys[name]; ok {
 		return k, nil
 	}
@@ -58,7 +59,7 @@ func read(t *testing.T, path string) string {
 
 func TestAddWritesHostEntryForSandbox(t *testing.T) {
 	a, _ := newAccess(t)
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
 	cfg := read(t, filepath.Join(a.Dir, "config"))
@@ -80,7 +81,7 @@ func TestAddWritesHostEntryForSandbox(t *testing.T) {
 
 func TestAddGeneratesOrcasmKeyAndAuthorizesItInMSB(t *testing.T) {
 	a, m := newAccess(t)
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
 	pub := strings.TrimSpace(read(t, filepath.Join(a.Dir, "id_ed25519.pub")))
@@ -103,14 +104,14 @@ func TestAddPinsSandboxHostKeyAndRefreshesItOnReAdd(t *testing.T) {
 	a, m := newAccess(t)
 	m.hostKeys["demo"] = "ssh-ed25519 OLDKEY"
 	m.hostKeys["other"] = "ssh-ed25519 OTHERKEY"
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Add("other"); err != nil {
+	if err := a.Add(context.Background(), "other"); err != nil {
 		t.Fatal(err)
 	}
 	m.hostKeys["demo"] = "ssh-ed25519 NEWKEY"
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
 	got := read(t, filepath.Join(a.Dir, "known_hosts"))
@@ -128,7 +129,7 @@ func TestRemoveDropsOnlyThatSandboxEntry(t *testing.T) {
 	m.hostKeys["demo"] = "ssh-ed25519 DEMOKEY"
 	m.hostKeys["other"] = "ssh-ed25519 OTHERKEY"
 	for _, n := range []string{"demo", "other"} {
-		if err := a.Add(n); err != nil {
+		if err := a.Add(context.Background(), n); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -227,7 +228,7 @@ func TestLinkUserConfigCreatesMissingConfig(t *testing.T) {
 
 func TestCommandReachesTheSandboxWithoutTheUserConfig(t *testing.T) {
 	a, _ := newAccess(t)
-	if err := a.Add("demo"); err != nil {
+	if err := a.Add(context.Background(), "demo"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -247,13 +248,52 @@ func TestCommandReachesTheSandboxWithoutTheUserConfig(t *testing.T) {
 
 func TestAddReusesExistingKey(t *testing.T) {
 	a, m := newAccess(t)
-	if err := a.Add("one"); err != nil {
+	if err := a.Add(context.Background(), "one"); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.Add("two"); err != nil {
+	if err := a.Add(context.Background(), "two"); err != nil {
 		t.Fatal(err)
 	}
 	if len(m.authorized) != 2 || m.authorized[0] != m.authorized[1] {
 		t.Errorf("expected the same key authorized twice, got %q", m.authorized)
+	}
+}
+
+// sshResolve is what ssh would use to reach host when run as cmd (no
+// connection is made).
+func sshResolve(t *testing.T, cmd, host string) string {
+	t.Helper()
+	out, err := exec.Command("sh", "-c", cmd+` -G "$0"`, host).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s -G %s: %v\n%s", cmd, host, err, out)
+	}
+	return string(out)
+}
+
+// The host git remote must reach Sandboxes without the Include in
+// ~/.ssh/config, and leave the user's other hosts (e.g. origin) as they were.
+func TestGitSSHCommandReachesSandboxesAndTheUsersOwnHosts(t *testing.T) {
+	a, _ := newAccess(t)
+	if err := os.MkdirAll(a.UserSSHDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	userConfig := "Host work\n  HostName code.example.com\n  User me\n"
+	if err := os.WriteFile(filepath.Join(a.UserSSHDir, "config"), []byte(userConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Add(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := a.GitSSHCommand()
+
+	if got := sshResolve(t, cmd, "orcasm-demo"); !strings.Contains(got, "proxycommand msb ssh serve demo --stdio") || !strings.Contains(got, "user dev") {
+		t.Errorf("orcasm-demo does not go through msb:\n%s", got)
+	}
+	if got := sshResolve(t, cmd, "work"); !strings.Contains(got, "hostname code.example.com") || !strings.Contains(got, "user me") {
+		t.Errorf("the user's own host lost its settings:\n%s", got)
+	}
+	if linked, _ := a.UserConfigLinked(); linked {
+		t.Error("~/.ssh/config was linked without consent")
 	}
 }

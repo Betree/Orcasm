@@ -33,7 +33,7 @@ func (f *fakeCreateMSB) Create(_ context.Context, opts msb.CreateOptions) error 
 	return f.createErr
 }
 
-func (f *fakeCreateMSB) List(context.Context, ...string) ([]msb.Listing, error) {
+func (f *fakeCreateMSB) List(context.Context, ...msb.Label) ([]msb.Listing, error) {
 	return f.existing, nil
 }
 
@@ -50,7 +50,7 @@ func hostValues(s wizard.Secret) (string, error) {
 	return "", errors.New("no value on the host")
 }
 
-func (f *fakeCreateMSB) ExecTo(_ context.Context, name, user string, out io.Writer, argv ...string) error {
+func (f *fakeCreateMSB) ExecStreaming(_ context.Context, name, user string, out io.Writer, argv ...string) error {
 	f.execs = append(f.execs, execCall{name, user, argv})
 	io.WriteString(out, "==> progress\n")
 	return f.execErr
@@ -58,12 +58,12 @@ func (f *fakeCreateMSB) ExecTo(_ context.Context, name, user string, out io.Writ
 
 func demoConfig() wizard.Config {
 	return wizard.Config{
-		Folder:    "/home/u/code/demo",
-		Name:      "demo",
-		Resources: wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
-		HostPort:  6769,
-		Harnesses: []string{"claude", "codex"},
-		Git:       wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
+		ProjectPath: "/home/u/code/demo",
+		Name:        "demo",
+		Resources:   wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:    6769,
+		Harnesses:   []string{"claude", "codex"},
+		Git:         wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
 	}
 }
 
@@ -75,12 +75,12 @@ func TestProvisionCreatesTheSandboxFromTheWizardConfig(t *testing.T) {
 	want := msb.CreateOptions{
 		Image: "ghcr.io/superradcompany/ubuntu-systemd:24.04",
 		Name:  "demo",
-		Labels: []string{
-			"orcasm=1",
-			"orcasm.folder=/home/u/code/demo",
-			"orcasm.main=/home/dev/demo",
-			"orcasm.port=6769",
-			"orcasm.schema=0",
+		Labels: []msb.Label{
+			{Key: "orcasm", Value: "1"},
+			{Key: "orcasm.project", Value: "/home/u/code/demo"},
+			{Key: "orcasm.main", Value: "/home/dev/demo"},
+			{Key: "orcasm.port", Value: "6769"},
+			{Key: "orcasm.schema", Value: "0"},
 		},
 		CPUs:        4,
 		MemoryGiB:   8,

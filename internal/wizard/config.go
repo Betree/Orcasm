@@ -6,8 +6,8 @@ package wizard
 
 // Config is everything the Wizard collected for one Sandbox.
 type Config struct {
-	// Folder is the absolute path of the Project on the host.
-	Folder string `toml:"folder,omitempty"`
+	// ProjectPath is the absolute path of the Project on the host.
+	ProjectPath string `toml:"project_path,omitempty"`
 	// Name is the Sandbox name; unique among existing Sandboxes.
 	Name      string    `toml:"name,omitempty"`
 	Resources Resources `toml:"resources,omitempty"`
@@ -23,6 +23,10 @@ type Config struct {
 	// Git is the identity commits are made with in the Sandbox; empty means
 	// none was shared.
 	Git GitIdentity `toml:"git,omitempty"`
+	// LinkSSHConfig is the user's consent to add one Include line to
+	// ~/.ssh/config, so VS Code Remote-SSH lists the Sandbox. Asked only
+	// while that line is missing, and never remembered.
+	LinkSSHConfig bool `toml:"link_ssh_config,omitempty"`
 }
 
 // GitIdentity is a git user.name and user.email.
@@ -31,7 +35,7 @@ type GitIdentity struct {
 	Email string `toml:"email,omitempty"`
 }
 
-// Resources sizes the Sandbox VM.
+// Resources sizes the Sandbox.
 type Resources struct {
 	CPUs          int `toml:"cpus,omitempty"`
 	MemoryGiB     int `toml:"memory_gib,omitempty"`
@@ -42,7 +46,7 @@ type Resources struct {
 // Project holds the project-level answers, saved to the committable
 // orcasm.toml at the root of the Project.
 type Project struct {
-	// ComposeFiles are paths relative to the Project folder making up the Stack.
+	// ComposeFiles are paths relative to the Project making up the Stack.
 	ComposeFiles []string `toml:"compose_files,omitempty"`
 	// Workbench is the Compose service used as Workbench; empty means the
 	// generic fallback Workbench.
@@ -51,7 +55,7 @@ type Project struct {
 	// and WebPort the container port it listens on.
 	WebService string `toml:"web_service,omitempty"`
 	WebPort    int    `toml:"web_port,omitempty"`
-	// BringFiles are gitignored paths (relative to the Project folder) copied
+	// BringFiles are gitignored paths (relative to the Project) copied
 	// into the Sandbox along with the tracked files, e.g. `.env`.
 	BringFiles []string `toml:"bring_files,omitempty"`
 }

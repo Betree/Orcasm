@@ -24,7 +24,7 @@ func TestCopyIntoRealSandbox(t *testing.T) {
 		t.Skip("ORCASM_TEST_SANDBOX not set")
 	}
 	ctx := context.Background()
-	sb := msb.Sandbox{Name: name}
+	sb := msb.CLI{}.Sandbox(name)
 	host := newHostRepo(t)
 	git(t, host, "remote", "add", "origin", "git@example.com:acme/app.git")
 	write(t, filepath.Join(host, "README"), "edited\n")

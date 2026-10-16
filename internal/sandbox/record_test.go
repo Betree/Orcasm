@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/sandbox"
 	"github.com/Betree/Orcasm/internal/wizard"
 )
@@ -54,7 +55,7 @@ func TestRemoveConfigForgetsTheSandbox(t *testing.T) {
 	}
 }
 
-func TestSecretEnvSuppliesEachKeptSecretFromTheHost(t *testing.T) {
+func TestSecretsSuppliesEachKeptSecretFromTheHost(t *testing.T) {
 	dir := t.TempDir()
 	cfg := demoConfig()
 	cfg.Secrets = []wizard.Secret{{Name: "GH_TOKEN", Hosts: []string{"github.com"}}}
@@ -62,31 +63,31 @@ func TestSecretEnvSuppliesEachKeptSecretFromTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env, err := sandbox.SecretEnv(dir, "demo", hostValues)
+	env, err := sandbox.Secrets(dir, "demo", hostValues)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"GH_TOKEN=ghp_from_host"}; !reflect.DeepEqual(env, want) {
-		t.Errorf("env %q, want %q", env, want)
+	if want := []msb.Secret{{Name: "GH_TOKEN", Hosts: []string{"github.com"}, Value: "ghp_from_host"}}; !reflect.DeepEqual(env, want) {
+		t.Errorf("secrets %+v, want %+v", env, want)
 	}
 }
 
-func TestSecretEnvFailsWhenTheHostLostAValue(t *testing.T) {
+func TestSecretsFailsWhenTheHostLostAValue(t *testing.T) {
 	dir := t.TempDir()
 	cfg := demoConfig()
 	cfg.Secrets = []wizard.Secret{{Name: "OPENAI_API_KEY", Hosts: []string{"api.openai.com"}}}
 	if err := sandbox.SaveConfig(dir, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := sandbox.SecretEnv(dir, "demo", hostValues); err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
+	if _, err := sandbox.Secrets(dir, "demo", hostValues); err == nil || !strings.Contains(err.Error(), "OPENAI_API_KEY") {
 		t.Fatalf("want an error naming the secret, got %v", err)
 	}
 }
 
 // Sandboxes created before their Config was kept start without secrets.
-func TestSecretEnvOfASandboxWithoutKeptConfigIsEmpty(t *testing.T) {
-	env, err := sandbox.SecretEnv(t.TempDir(), "old", hostValues)
+func TestSecretsOfASandboxWithoutKeptConfigIsEmpty(t *testing.T) {
+	env, err := sandbox.Secrets(t.TempDir(), "old", hostValues)
 	if err != nil || len(env) != 0 {
-		t.Fatalf("env %q, err %v; want none", env, err)
+		t.Fatalf("secrets %+v, err %v; want none", env, err)
 	}
 }

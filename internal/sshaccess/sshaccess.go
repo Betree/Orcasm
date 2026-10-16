@@ -10,6 +10,7 @@ package sshaccess
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -21,10 +22,10 @@ import (
 type MSB interface {
 	// AuthorizeSSHKey adds the public key in pubKeyFile to msb's global
 	// authorized_keys. It must be idempotent.
-	AuthorizeSSHKey(pubKeyFile string) error
+	AuthorizeSSHKey(ctx context.Context, pubKeyFile string) error
 	// SandboxHostKey returns the sandbox's SSH host public key
 	// ("<type> <base64>").
-	SandboxHostKey(name string) (string, error)
+	SandboxHostKey(ctx context.Context, name string) (string, error)
 }
 
 // Access manages SSH access to Sandboxes.
@@ -64,6 +65,26 @@ func (a Access) Command(name string, opts ...string) []string {
 	return append(argv, HostAlias(name))
 }
 
+// GitSSHCommand is the ssh command (a shell command line, for git's
+// core.sshCommand) that reaches `orcasm-<name>` hosts without the user's
+// ~/.ssh/config including orcasm's, while every other host keeps the user's
+// and the system's ssh settings. Add writes the config file it reads.
+func (a Access) GitSSHCommand() string {
+	return "ssh -F " + shellQuote(a.gitConfigPath())
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// gitConfig is read by GitSSHCommand: `-F` replaces ssh's usual config files,
+// so it includes them back after orcasm's own Host entries.
+func (a Access) gitConfig() string {
+	return "# Written by orcasm: its Sandboxes, then your usual ssh config.\n" +
+		"Include " + quote(a.configPath()) + "\n" +
+		"Include " + quote(a.userConfigPath()) + "\n" +
+		"Include /etc/ssh/ssh_config\n"
+}
+
+func (a Access) gitConfigPath() string  { return filepath.Join(a.Dir, "git_ssh_config") }
 func (a Access) configPath() string     { return filepath.Join(a.Dir, "config") }
 func (a Access) keyPath() string        { return filepath.Join(a.Dir, "id_ed25519") }
 func (a Access) knownHostsPath() string { return filepath.Join(a.Dir, "known_hosts") }
@@ -72,22 +93,25 @@ func (a Access) knownHostsPath() string { return filepath.Join(a.Dir, "known_hos
 // key exists and is authorized in msb, records the Sandbox's host key, and
 // writes its Host entry to orcasm's ssh config. Calling it again refreshes
 // the entry (e.g. after the Sandbox was recreated with a new host key).
-func (a Access) Add(name string) error {
+func (a Access) Add(ctx context.Context, name string) error {
 	if err := os.MkdirAll(a.Dir, 0o700); err != nil {
 		return err
 	}
 	if err := a.ensureKey(); err != nil {
 		return err
 	}
-	if err := a.MSB.AuthorizeSSHKey(a.keyPath() + ".pub"); err != nil {
+	if err := a.MSB.AuthorizeSSHKey(ctx, a.keyPath()+".pub"); err != nil {
 		return fmt.Errorf("authorize orcasm key in msb: %w", err)
 	}
-	hostKey, err := a.MSB.SandboxHostKey(name)
+	hostKey, err := a.MSB.SandboxHostKey(ctx, name)
 	if err != nil {
 		return fmt.Errorf("read host key of sandbox %s: %w", name, err)
 	}
 	alias := HostAlias(name)
 	if err := setKnownHost(a.knownHostsPath(), alias, alias+" "+strings.TrimSpace(hostKey)+"\n"); err != nil {
+		return err
+	}
+	if err := writeFile(a.gitConfigPath(), a.gitConfig()); err != nil {
 		return err
 	}
 	return setEntry(a.configPath(), alias, a.hostBlock(name))

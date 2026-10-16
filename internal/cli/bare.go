@@ -13,8 +13,8 @@ import (
 func init() { bareRun = runBare }
 
 // runBare is `orcasm` with no subcommand: list the Sandboxes, then get the
-// current folder's Sandbox running and print its URL, offering to start it,
-// or to create one when the folder has none.
+// current directory's Sandbox running and print its URL, offering to start it,
+// or to create one when the Project has none.
 func runBare(cmd *cobra.Command, _ []string) error {
 	ctx := cmd.Context()
 	out := cmd.OutOrStdout()
@@ -34,7 +34,7 @@ func runBare(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	here, err := m.InFolder(ctx, cwd)
+	here, err := m.InProject(ctx, cwd)
 	if err != nil {
 		return err
 	}

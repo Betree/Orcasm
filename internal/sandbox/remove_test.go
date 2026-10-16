@@ -46,11 +46,11 @@ func project(t *testing.T) (host, main string, f *fakeMSB, ssh *fakeSSH) {
 	git(t, host, "commit", "-q", "-m", "first")
 	main = filepath.Join(t.TempDir(), "app")
 	git(t, host, "clone", "-q", host, main)
-	if err := repository.AddSandboxRemote(context.Background(), host, "app", main); err != nil {
+	if err := repository.AddSandboxRemote(context.Background(), host, "app", main, "ssh"); err != nil {
 		t.Fatal(err)
 	}
 	f = newFakeMSB()
-	f.add("app", msb.Running, sandbox.CreateLabels(host, main)...)
+	f.add("app", msb.Running, labelStrings(sandbox.CreateLabels(host, main))...)
 	return host, main, f, &fakeSSH{}
 }
 

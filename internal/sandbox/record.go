@@ -9,6 +9,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/wizard"
 )
 
@@ -48,10 +49,10 @@ func RemoveConfig(dir, name string) error {
 	return nil
 }
 
-// SecretEnv is the "NAME=VALUE" environment `msb start` needs for Sandbox
-// name: each kept secret spec valued from the host. A Sandbox without a kept
-// Config has no secrets.
-func SecretEnv(dir, name string, value SecretValue) ([]string, error) {
+// Secrets are the secrets `msb start` needs for Sandbox name: each kept
+// secret spec valued from the host. A Sandbox without a kept Config has no
+// secrets.
+func Secrets(dir, name string, value SecretValue) ([]msb.Secret, error) {
 	cfg, err := LoadConfig(dir, name)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -59,13 +60,18 @@ func SecretEnv(dir, name string, value SecretValue) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var env []string
-	for _, s := range cfg.Secrets {
+	return valued(cfg.Secrets, value)
+}
+
+// valued gives each secret spec its host value.
+func valued(specs []wizard.Secret, value SecretValue) ([]msb.Secret, error) {
+	var out []msb.Secret
+	for _, s := range specs {
 		v, err := value(s)
 		if err != nil {
 			return nil, fmt.Errorf("secret %s: %w", s.Name, err)
 		}
-		env = append(env, s.Name+"="+v)
+		out = append(out, msb.Secret{Name: s.Name, Hosts: s.Hosts, Value: v})
 	}
-	return env, nil
+	return out, nil
 }

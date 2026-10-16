@@ -29,7 +29,7 @@ func (m Manager) URL(ctx context.Context, name string) (string, error) {
 		return "", err
 	}
 	if !s.Running() {
-		return "", fmt.Errorf("Sandbox %q is %s; run `orcasm start %s` first", name, strings.ToLower(s.Status), name)
+		return "", fmt.Errorf("Sandbox %q is %s; run `orcasm start %s` first", name, strings.ToLower(string(s.Status)), name)
 	}
 	poll := m.Poll
 	if poll == 0 {

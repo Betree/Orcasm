@@ -15,13 +15,13 @@ import (
 // project-level answers.
 const ProjectFile = "orcasm.toml"
 
-// machineFile, in the config dir, holds the machine-level answers.
-const machineFile = "config.toml"
+// hostFile, in the config dir, holds the host-level answers.
+const hostFile = "config.toml"
 
-// machineAnswers are the answers that belong to this host rather than to the
+// hostAnswers are the answers that belong to this host rather than to the
 // Project: how big Sandboxes are, which harnesses to install and which host
 // tokens may be shared (by name only: token values are never saved).
-type machineAnswers struct {
+type hostAnswers struct {
 	Resources Resources   `toml:"resources"`
 	Harnesses []string    `toml:"harnesses"`
 	Secrets   []string    `toml:"secrets"`
@@ -38,12 +38,12 @@ type savedProject struct {
 	BringFiles   []string `toml:"bring_files"`
 }
 
-// loadSaved returns the saved answers for this folder and config dir, as a
+// loadSaved returns the saved answers for this projectPath and config dir, as a
 // partial Config (missing files give zero values).
-func loadSaved(folder, configDir string) (Config, error) {
+func loadSaved(projectPath, configDir string) (Config, error) {
 	var saved Config
-	var m machineAnswers
-	if err := decodeIfExists(filepath.Join(configDir, machineFile), &m); err != nil {
+	var m hostAnswers
+	if err := decodeIfExists(filepath.Join(configDir, hostFile), &m); err != nil {
 		return Config{}, err
 	}
 	saved.Resources, saved.Harnesses, saved.Git = m.Resources, m.Harnesses, m.Git
@@ -51,7 +51,7 @@ func loadSaved(folder, configDir string) (Config, error) {
 		saved.Secrets = append(saved.Secrets, Secret{Name: name})
 	}
 	var p savedProject
-	if err := decodeIfExists(filepath.Join(folder, ProjectFile), &p); err != nil {
+	if err := decodeIfExists(filepath.Join(projectPath, ProjectFile), &p); err != nil {
 		return Config{}, err
 	}
 	saved.Project = Project(p)
@@ -82,7 +82,7 @@ func save(cfg Config, configDir string) error {
 	for _, s := range cfg.Secrets {
 		secrets = append(secrets, s.Name)
 	}
-	if err := encode(filepath.Join(configDir, machineFile), machineAnswers{cfg.Resources, harnesses, secrets, cfg.Git}); err != nil {
+	if err := encode(filepath.Join(configDir, hostFile), hostAnswers{cfg.Resources, harnesses, secrets, cfg.Git}); err != nil {
 		return err
 	}
 	p := savedProject(cfg.Project)
@@ -92,7 +92,7 @@ func save(cfg Config, configDir string) error {
 	if p.BringFiles == nil {
 		p.BringFiles = []string{}
 	}
-	return encode(filepath.Join(cfg.Folder, ProjectFile), p)
+	return encode(filepath.Join(cfg.ProjectPath, ProjectFile), p)
 }
 
 func encode(path string, v any) error {

@@ -1,6 +1,7 @@
 package msb_test
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,7 @@ func TestSandboxHostKeyDerivesPublicKeyFromSandboxHostKey(t *testing.T) {
 	pub := keygen(t, filepath.Join(dir, "host_ed25519"))
 	want := strings.Join(strings.Fields(pub)[:2], " ")
 
-	got, err := msb.CLI{Home: home}.SandboxHostKey("demo")
+	got, err := msb.CLI{Home: home}.SandboxHostKey(context.Background(), "demo")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +42,7 @@ func TestSandboxHostKeyDerivesPublicKeyFromSandboxHostKey(t *testing.T) {
 }
 
 func TestSandboxHostKeyUnknownSandbox(t *testing.T) {
-	if _, err := (msb.CLI{Home: t.TempDir()}).SandboxHostKey("nope"); err == nil {
+	if _, err := (msb.CLI{Home: t.TempDir()}).SandboxHostKey(context.Background(), "nope"); err == nil {
 		t.Fatal("expected error for unknown sandbox")
 	}
 }
@@ -57,7 +58,7 @@ func TestAuthorizeSSHKeyWithRealMSB(t *testing.T) {
 	pub := keygen(t, key)
 	c := msb.CLI{Home: home}
 	for range 2 { // idempotent
-		if err := c.AuthorizeSSHKey(key + ".pub"); err != nil {
+		if err := c.AuthorizeSSHKey(context.Background(), key+".pub"); err != nil {
 			t.Fatal(err)
 		}
 	}

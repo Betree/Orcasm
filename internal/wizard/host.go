@@ -2,6 +2,7 @@ package wizard
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,7 +16,7 @@ import (
 	"github.com/Betree/Orcasm/internal/msb"
 )
 
-// NewHost probes the machine orcasm runs on.
+// NewHost probes the host orcasm runs on.
 func NewHost() (Host, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -38,8 +39,8 @@ func NewHost() (Host, error) {
 		Harnesses: harnesses,
 		SandboxExists: func(name string) bool {
 			// Without msb there are no Sandboxes; `orcasm doctor` reports it.
-			names, _ := msb.SandboxNames()
-			return slices.Contains(names, name)
+			all, _ := msb.CLI{}.List(context.Background())
+			return slices.ContainsFunc(all, func(l msb.Listing) bool { return l.Name == name })
 		},
 		FirstFreePort: hostport.FirstFree,
 		Getenv:        os.Getenv,

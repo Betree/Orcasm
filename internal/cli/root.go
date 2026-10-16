@@ -31,7 +31,7 @@ func register(newCmd func(BuildInfo) *cobra.Command) {
 func NewRootCommand(info BuildInfo) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "orcasm",
-		Short:         "Give a project an isolated VM where many coding agents work in parallel",
+		Short:         "Give a Project a Sandbox where many coding agents work in parallel",
 		Version:       info.Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,

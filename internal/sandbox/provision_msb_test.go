@@ -31,13 +31,13 @@ func TestProvisionARealSandbox(t *testing.T) {
 	ctx := context.Background()
 	t.Cleanup(func() { exec.Command("msb", "rm", "--force", name).Run() })
 	cfg := wizard.Config{
-		Folder:    "/home/someone/code/demo",
-		Name:      name,
-		Resources: wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
-		HostPort:  port,
-		Harnesses: []string{"claude", "codex", "opencode"},
-		Secrets:   []wizard.Secret{{Name: "ORCASM_TEST_TOKEN", Hosts: []string{"example.com"}}},
-		Git:       wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
+		ProjectPath: "/home/someone/code/demo",
+		Name:        name,
+		Resources:   wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:    port,
+		Harnesses:   []string{"claude", "codex", "opencode"},
+		Secrets:     []wizard.Secret{{Name: "ORCASM_TEST_TOKEN", Hosts: []string{"example.com"}}},
+		Git:         wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
 	}
 	value := func(wizard.Secret) (string, error) { return "not-a-real-token", nil }
 
@@ -55,17 +55,18 @@ func TestProvisionARealSandbox(t *testing.T) {
 		t.Errorf("web UI on host port: %d %.200s", resp.StatusCode, body)
 	}
 
-	sb := msb.Sandbox{Name: name}
+	sb := msb.CLI{}.Sandbox(name)
 	checks := `pwd; stat -c %U "$PWD"; id -nG | tr ' ' '\n' | grep -x docker
 for c in git rsync curl gh claude codex opencode; do command -v $c >/dev/null || echo "missing $c"; done
 docker run --rm hello-world >/dev/null && echo docker-ok
+env -i PATH=/usr/bin:/bin curl -fsS -o /dev/null https://github.com && echo tls-ok
 systemctl is-active orca; ps -o user= -C orca-ide | sort -u
 git config user.name; echo "$ORCASM_TEST_TOKEN"`
 	out, err := sb.Exec(ctx, sandbox.User, "bash", "-lc", checks)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\n"
+	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\ntls-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\n"
 	if out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
 	}
