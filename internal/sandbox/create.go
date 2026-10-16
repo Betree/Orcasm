@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/repository"
 	"github.com/Betree/Orcasm/internal/wizard"
@@ -30,6 +31,9 @@ type SSHAccess interface {
 type Creator struct {
 	// Provision creates the Sandbox and installs everything in it.
 	Provision func(ctx context.Context, cfg wizard.Config, out io.Writer) error
+	// InstallOrcasm puts orcasm and the Project's Worktree config in the
+	// Sandbox, for Orca's repo hooks (InstallOrcasm).
+	InstallOrcasm func(ctx context.Context, cfg wizard.Config, out io.Writer) error
 	// Copy copies the Project into Sandbox name.
 	Copy func(ctx context.Context, name string, opts repository.CopyOptions) error
 	SSH  SSHAccess
@@ -38,6 +42,9 @@ type Creator struct {
 	// RegisterInOrca makes guestPath an Orca project in Sandbox name. It
 	// fails until Orca's runtime serves.
 	RegisterInOrca func(ctx context.Context, name, guestPath string) error
+	// SetHooks stores orcasm's setup and archive hooks in Orca's settings of
+	// the project at guestPath (SetOrcaHooks).
+	SetHooks func(ctx context.Context, name, guestPath string) error
 	// ConfigDir keeps each Sandbox's Config (SaveConfig).
 	ConfigDir string
 	// OrcaWait bounds how long registration waits for Orca's runtime, trying
@@ -45,11 +52,15 @@ type Creator struct {
 	OrcaWait, Poll time.Duration
 }
 
-// NewCreator returns the Creator driving msb through m.
-func NewCreator(m msb.CLI, ssh SSHAccess, secretValue SecretValue, configDir string) Creator {
+// NewCreator returns the Creator driving msb through m. guestBinary is the
+// orcasm installed in the Sandbox (GuestBinary).
+func NewCreator(m msb.CLI, ssh SSHAccess, secretValue SecretValue, configDir, guestBinary string) Creator {
 	return Creator{
 		Provision: func(ctx context.Context, cfg wizard.Config, out io.Writer) error {
 			return Provision(ctx, m, cfg, secretValue, out)
+		},
+		InstallOrcasm: func(ctx context.Context, cfg wizard.Config, out io.Writer) error {
+			return InstallOrcasm(ctx, m, cfg, guestBinary, out)
 		},
 		Copy: func(ctx context.Context, name string, opts repository.CopyOptions) error {
 			return repository.Copy(ctx, m.Sandbox(name), opts)
@@ -57,7 +68,11 @@ func NewCreator(m msb.CLI, ssh SSHAccess, secretValue SecretValue, configDir str
 		SSH:       ssh,
 		AddRemote: repository.AddSandboxRemote,
 		RegisterInOrca: func(ctx context.Context, name, guestPath string) error {
-			return repository.RegisterInOrca(ctx, m.Sandbox(name), User, guestPath)
+			return repository.RegisterInOrca(ctx, m.Sandbox(name), guest.User, guestPath)
+		},
+		SetHooks: func(ctx context.Context, name, guestPath string) error {
+			_, err := m.Exec(ctx, name, guest.User, guest.Binary, "worktree", "install-hooks", guestPath)
+			return err
 		},
 		ConfigDir: configDir,
 		OrcaWait:  2 * time.Minute,
@@ -72,6 +87,9 @@ func (c Creator) Create(ctx context.Context, cfg wizard.Config, out io.Writer) e
 	if err := c.Provision(ctx, cfg, out); err != nil {
 		return err
 	}
+	if err := c.InstallOrcasm(ctx, cfg, out); err != nil {
+		return fmt.Errorf("install orcasm in %s: %w", cfg.Name, err)
+	}
 	// Starting the Sandbox again needs its secret specs, whatever fails next.
 	if err := SaveConfig(c.ConfigDir, cfg); err != nil {
 		return err
@@ -81,7 +99,7 @@ func (c Creator) Create(ctx context.Context, cfg wizard.Config, out io.Writer) e
 	err := c.Copy(ctx, cfg.Name, repository.CopyOptions{
 		HostPath:     cfg.ProjectPath,
 		GuestPath:    main,
-		Owner:        User,
+		Owner:        guest.User,
 		IgnoredFiles: cfg.Project.BringFiles,
 	})
 	if err != nil {
@@ -103,7 +121,14 @@ func (c Creator) Create(ctx context.Context, cfg wizard.Config, out io.Writer) e
 		return fmt.Errorf("host git remote for %s: %w", cfg.Name, err)
 	}
 	fmt.Fprintln(out, "==> Registering Main in Orca")
-	return c.registerWhenOrcaServes(ctx, cfg.Name, main)
+	if err := c.registerWhenOrcaServes(ctx, cfg.Name, main); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "==> Setting Orca's Worktree hooks (setup starts the Stack, archive tears it down)")
+	if err := c.SetHooks(ctx, cfg.Name, main); err != nil {
+		return fmt.Errorf("set Orca hooks in %s: %w", cfg.Name, err)
+	}
+	return nil
 }
 
 // registerWhenOrcaServes retries registration while Orca's runtime starts:

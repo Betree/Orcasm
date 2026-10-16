@@ -102,15 +102,18 @@ func TestProvisionRunsTheProvisioningScriptAsRoot(t *testing.T) {
 	if err := sandbox.Provision(context.Background(), f, demoConfig(), hostValues, &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.execs) != 1 {
-		t.Fatalf("want one exec, got %+v", f.execs)
+	var c execCall
+	for _, e := range f.execs {
+		if len(e.argv) >= 3 && e.argv[0] == "bash" && e.argv[1] == "-c" && strings.Contains(e.argv[2], "orca-ide serve") {
+			c = e
+			break
+		}
 	}
-	c := f.execs[0]
+	if c.argv == nil {
+		t.Fatalf("want a bash -c <provisioning script> exec, got %+v", f.execs)
+	}
 	if c.name != "demo" || c.user != "" {
 		t.Errorf("exec in %q as %q, want demo as root", c.name, c.user)
-	}
-	if len(c.argv) < 3 || c.argv[0] != "bash" || c.argv[1] != "-c" || !strings.Contains(c.argv[2], "orca-ide serve") {
-		t.Fatalf("want bash -c <provisioning script>, got %q", c.argv)
 	}
 	wantArgs := []string{"provision", "dev", "6769", "1.4.227", "/home/dev/demo",
 		"Ada Lovelace", "ada@example.com", "claude", "codex"}

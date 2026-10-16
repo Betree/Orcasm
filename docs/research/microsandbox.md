@@ -108,6 +108,7 @@ Everything here comes from docs, help text or source. **Nothing in §1–10 was 
   - (docs:/networking/overview)
 - **Reaching the host:** `host.microsandbox.internal`, which needs the `host` profile, e.g. `--net public,host`.
 - **Host sockets:** `--vsock HOST_PATH:PORT` exposes a host Unix socket to the guest without opening TCP (docs:/networking/host-sockets).
+- **Known limitation (#20, #21): the Sandbox's port 80 belongs to the Worktree proxy.** The proxy (`orcasm-proxy`, Traefik on the host network) serves `http://<worktree>.localhost` on port 80 of every guest interface, which is the URL Orca's integrated browser opens. Worktree Stacks publish no ports, but Main's Stack keeps its published ports. If a Project's Compose files publish host port 80, Main's Stack cannot start. `stack up` checks `docker compose config` for this and refuses with a message to publish the port elsewhere (e.g. `"8080:80"`). Moving the proxy off port 80 would put a port in every Worktree URL, so we did not.
 
 ## 6. Secrets
 
@@ -126,6 +127,7 @@ Everything here comes from docs, help text or source. **Nothing in §1–10 was 
   - **Violation actions:** `block`, `block-and-log` (the default), and `block-and-terminate`. A request to a non-allowed host carrying the placeholder is blocked.
   - **Passthrough:** `passthrough=<host>` lets a named host receive the placeholder unchanged.
 - **TLS trust:** secrets require TLS interception, which is enabled automatically. msb adds its CA (`~/.microsandbox/tls/ca.{crt,key}`) to the guest system trust store. Applications that keep their own trust store, such as Node, Python certifi, or **containers inside Docker**, need extra setup; the `scripts/msb-trust/msb-trust.sh` helper covers common cases (docs:/networking/tls).
+- **Known limitation (#17): only the Workbench trusts msb's CA.** The Stack override mounts the Sandbox's CA bundle into the Workbench alone and points `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `CURL_CA_BUNDLE`, `REQUESTS_CA_BUNDLE` and `GIT_SSL_CAINFO` at it. Once a Sandbox has any secret, msb intercepts all outbound TLS, including from containers. Other services of a Stack (an API calling a third-party HTTPS service, an app container running `npm install` at start) then fail with certificate errors, both in Worktree Stacks and in Main's. orcasm does not force the bundle into arbitrary images: their CA paths and tools differ, and replacing a service's trust store could break it. A Project that needs this mounts `/etc/ssl/certs/ca-certificates.crt` into the service itself, or sets its runtime's CA variable. A Sandbox without secrets has no interception and no such failures.
 - **Can guest code read the raw value? No**, for values passed as secrets. The guest only ever holds the placeholder. Caveats from the docs:
   - An allowed endpoint that echoes the credential back exposes it.
   - Placeholders cannot be used for credentials that are signed inside the guest.
@@ -282,7 +284,8 @@ Tested on throwaway `spike15-*` sandboxes, removed afterwards.
 - **Default root disk size** for new local OCI sandboxes in 0.7.8. 4 GiB was the legacy default.
 - **Contradiction on flat roots:** `docs/sandboxes/optimization.mdx` says flat roots don't support patches or snapshots, while `docs/cli/sandbox-commands.mdx` says they do.
 - **Exact label matching:** whether a bare `--label orcasm` selector does exact empty-value matching or key-exists matching. Use `orcasm=1` to sidestep the question.
-- **Docker inside the VM:** cgroup v1 or v2, cgroup delegation, and whether nested containers trust the msb TLS-interception CA. Interception only applies when enabled, e.g. by a secret; containers ship their own CA bundles.
+- **Docker inside the VM:** cgroup v1 or v2 and cgroup delegation.
+- **Tested (#17), containers and the msb CA:** with a secret set, container traffic is intercepted too. A stock `curlimages/curl` container fails on `https://example.com` (self-signed certificate in chain); with the Sandbox's `/etc/ssl/certs/ca-certificates.crt` bind-mounted and passed as the CA file it gets 200. Secret env vars in a container read as `$MSB_<NAME>` when Compose sets `NAME: $$MSB_<NAME>`. Ubuntu 24.04's `docker-compose-v2` is 2.40, so `!reset` works.
 - **Interception scope:** whether enabling TLS interception (implied by any secret) breaks certificate pinning or HTTP/2 for other hosts. `--tls-bypass` exists to exclude domains.
 - **OAuth:** any first-party support for OAuth or refreshing credentials. None was found in docs or source; the conclusion in §6 is inference.
 - **Nested KVM inside a sandbox:** not documented.

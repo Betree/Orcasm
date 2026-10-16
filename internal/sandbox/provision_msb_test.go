@@ -17,6 +17,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Betree/Orcasm/internal/guest"
 	"github.com/Betree/Orcasm/internal/msb"
 	"github.com/Betree/Orcasm/internal/sandbox"
 	"github.com/Betree/Orcasm/internal/wizard"
@@ -38,6 +39,7 @@ func TestProvisionARealSandbox(t *testing.T) {
 		Harnesses:   []string{"claude", "codex", "opencode"},
 		Secrets:     []wizard.Secret{{Name: "ORCASM_TEST_TOKEN", Hosts: []string{"example.com"}}},
 		Git:         wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
+		Project:     wizard.Project{ComposeFiles: []string{"compose.yml"}},
 	}
 	value := func(wizard.Secret) (string, error) { return "not-a-real-token", nil }
 
@@ -57,18 +59,41 @@ func TestProvisionARealSandbox(t *testing.T) {
 
 	sb := msb.CLI{}.Sandbox(name)
 	checks := `pwd; stat -c %U "$PWD"; id -nG | tr ' ' '\n' | grep -x docker
-for c in git rsync curl gh claude codex opencode; do command -v $c >/dev/null || echo "missing $c"; done
+for c in git rsync curl gh /opt/orcasm/harness/bin/{claude,codex,opencode}; do command -v $c >/dev/null || echo "missing $c"; done
 docker run --rm hello-world >/dev/null && echo docker-ok
 env -i PATH=/usr/bin:/bin curl -fsS -o /dev/null https://github.com && echo tls-ok
 systemctl is-active orca; ps -o user= -C orca-ide | sort -u
-git config user.name; echo "$ORCASM_TEST_TOKEN"`
-	out, err := sb.Exec(ctx, sandbox.User, "bash", "-lc", checks)
+git config user.name; echo "$ORCASM_TEST_TOKEN"
+curl -sS -o /dev/null -w 'proxy %{http_code}\n' http://no-such-worktree.localhost/`
+	out, err := sb.Exec(ctx, guest.User, "bash", "-lc", checks)
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\ntls-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\n"
+	want := "/home/dev/demo\ndev\ndocker\ndocker-ok\ntls-ok\nactive\ndev\nAda Lovelace\n$MSB_ORCASM_TEST_TOKEN\nproxy 404\n"
 	if out != want {
 		t.Errorf("got\n%s\nwant\n%s", out, want)
+	}
+
+	// Main's Stack: nothing runs until `stack up`, which keeps published ports.
+	stack := `set -e
+cat >compose.yml <<'EOF'
+services:
+  web:
+    image: nginx:alpine
+    ports: ["8080:80"]
+EOF
+echo "before: $(docker ps -q --filter label=com.docker.compose.project | wc -l)"
+stack up --wait >/dev/null 2>&1
+curl -fsS -o /dev/null http://127.0.0.1:8080/ && echo web-ok
+docker compose ls -q
+stack down >/dev/null 2>&1
+echo "after: $(docker ps -aq --filter label=com.docker.compose.project | wc -l)"`
+	out, err = sb.Exec(ctx, guest.User, "bash", "-lc", stack)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if want := "before: 0\nweb-ok\nmain\nafter: 0\n"; out != want {
+		t.Errorf("stack: got\n%s\nwant\n%s", out, want)
 	}
 }
 
