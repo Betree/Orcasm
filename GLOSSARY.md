@@ -32,6 +32,10 @@ _Avoid_: Feature, branch, workspace
 The container belonging to one Worktree, where that Worktree's agents and their commands run. Either a service from the Project's Compose files or a generic fallback.
 _Avoid_: Dev container, agent container
 
+**Migration**:
+A numbered, one-shot structural change that `orcasm upgrade` applies in place to a Sandbox made by an older orcasm; the last one applied is recorded on the Sandbox.
+_Avoid_: Schema change, patch
+
 **Stack**:
 The services from one or more Compose files, run together as a single isolated unit for one Worktree (or for Main, on demand).
 _Avoid_: Environment, services

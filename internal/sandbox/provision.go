@@ -26,15 +26,12 @@ const (
 	OrcaVersion = "1.4.227"
 	// OrcaPort is the guest port `orca-ide serve` listens on.
 	OrcaPort = 6768
-	// Schema is the last migration a freshly provisioned Sandbox is at,
-	// recorded in the `orcasm.schema` label (ADR 0006). 0 = no migrations yet.
-	Schema = 0
 )
 
 // Labels Provision adds to CreateLabels.
 const (
 	LabelPort   = "orcasm.port"   // host port of Orca's web UI
-	LabelSchema = "orcasm.schema" // last applied migration
+	LabelSchema = "orcasm.schema" // last applied migration (migrate.go)
 )
 
 // CreateMSB is the slice of microsandbox Provision needs. msb.CLI
@@ -90,7 +87,8 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 		Name:  cfg.Name,
 		Labels: append(CreateLabels(cfg.ProjectPath, main),
 			msb.Label{Key: LabelPort, Value: strconv.Itoa(cfg.HostPort)},
-			msb.Label{Key: LabelSchema, Value: strconv.Itoa(Schema)}),
+			// Provisioning builds the latest shape: nothing to migrate.
+			msb.Label{Key: LabelSchema, Value: strconv.Itoa(Latest())}),
 		CPUs:        cfg.Resources.CPUs,
 		MemoryGiB:   cfg.Resources.MemoryGiB,
 		RootDiskGiB: cfg.Resources.RootDiskGiB,
