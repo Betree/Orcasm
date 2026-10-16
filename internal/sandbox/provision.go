@@ -1,6 +1,6 @@
 package sandbox
 
-// Provisioning: a microsandbox VM with systemd, Docker, Orca (served to the
+// Provisioning: a microsandbox sandbox with systemd, Docker, Orca (served to the
 // host's browser), the selected agent harnesses and gh, all used through the
 // non-root User.
 
@@ -51,11 +51,11 @@ type CreateMSB interface {
 //go:embed provision.sh
 var provisionScript string
 
-// MainPath is where Main lives in the Sandbox for the Project at folder.
+// MainPath is where Main lives in the Sandbox for the Project at projectPath.
 // It exists (empty, owned by User) once Provision returns, and is the
 // working directory of msb exec and SSH sessions.
-func MainPath(folder string) string {
-	return path.Join("/home", User, filepath.Base(folder))
+func MainPath(projectPath string) string {
+	return path.Join("/home", User, filepath.Base(projectPath))
 }
 
 // SecretValue reads a Secret's value on the host (wizard.Host.SecretValue).
@@ -77,7 +77,7 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	if slices.ContainsFunc(all, func(l msb.Listing) bool { return l.Name == cfg.Name }) {
 		return fmt.Errorf("a sandbox named %s already exists", cfg.Name)
 	}
-	main := MainPath(cfg.Folder)
+	main := MainPath(cfg.ProjectPath)
 	secrets, err := valued(cfg.Secrets, secretValue)
 	if err != nil {
 		return err
@@ -85,7 +85,7 @@ func Provision(ctx context.Context, m CreateMSB, cfg wizard.Config, secretValue 
 	opts := msb.CreateOptions{
 		Image: Image,
 		Name:  cfg.Name,
-		Labels: append(CreateLabels(cfg.Folder, main),
+		Labels: append(CreateLabels(cfg.ProjectPath, main),
 			msb.Label{Key: LabelPort, Value: strconv.Itoa(cfg.HostPort)},
 			msb.Label{Key: LabelSchema, Value: strconv.Itoa(Schema)}),
 		CPUs:        cfg.Resources.CPUs,

@@ -31,13 +31,13 @@ func TestProvisionARealSandbox(t *testing.T) {
 	ctx := context.Background()
 	t.Cleanup(func() { exec.Command("msb", "rm", "--force", name).Run() })
 	cfg := wizard.Config{
-		Folder:    "/home/someone/code/demo",
-		Name:      name,
-		Resources: wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
-		HostPort:  port,
-		Harnesses: []string{"claude", "codex", "opencode"},
-		Secrets:   []wizard.Secret{{Name: "ORCASM_TEST_TOKEN", Hosts: []string{"example.com"}}},
-		Git:       wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
+		ProjectPath: "/home/someone/code/demo",
+		Name:        name,
+		Resources:   wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:    port,
+		Harnesses:   []string{"claude", "codex", "opencode"},
+		Secrets:     []wizard.Secret{{Name: "ORCASM_TEST_TOKEN", Hosts: []string{"example.com"}}},
+		Git:         wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
 	}
 	value := func(wizard.Secret) (string, error) { return "not-a-real-token", nil }
 

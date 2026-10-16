@@ -16,7 +16,7 @@ import (
 	"github.com/Betree/Orcasm/internal/hostport"
 )
 
-// Host is what the Wizard knows about the machine it runs on. NewHost probes
+// Host is what the Wizard knows about the host it runs on. NewHost probes
 // the real one; tests pass fakes.
 type Host struct {
 	Cwd       string
@@ -39,7 +39,7 @@ type Host struct {
 // Options configures one Wizard run.
 type Options struct {
 	Host Host
-	// ConfigDir holds machine-level answers (normally ~/.config/orcasm).
+	// ConfigDir holds host-level answers (normally ~/.config/orcasm).
 	ConfigDir string
 	// AnswersFile, when set, makes the run non-interactive: its answers
 	// override defaults and nothing is prompted. Otherwise the user is asked
@@ -69,13 +69,13 @@ func Run(opts Options) (Config, error) {
 	h := opts.Host
 	ask := prompter{in: opts.In, out: opts.Out}
 	if interactive {
-		answers.Folder = h.Cwd
-		if err := ask.folder(&answers.Folder); err != nil {
+		answers.ProjectPath = h.Cwd
+		if err := ask.projectPath(&answers.ProjectPath); err != nil {
 			return Config{}, err
 		}
 	}
-	folder := resolveFolder(h.Cwd, answers.Folder)
-	saved, err := loadSaved(folder, opts.ConfigDir)
+	projectPath := resolveProjectPath(h.Cwd, answers.ProjectPath)
+	saved, err := loadSaved(projectPath, opts.ConfigDir)
 	if err != nil {
 		return Config{}, err
 	}
@@ -84,15 +84,15 @@ func Run(opts Options) (Config, error) {
 		_, ok := availableSecret(h, s.Name)
 		return !ok
 	})
-	s := scanProject(folder)
-	cfg := defaults(h, folder, s)
+	s := scanProject(projectPath)
+	cfg := defaults(h, projectPath, s)
 	overlay(&cfg, saved)
 	overlay(&cfg, answers)
 	var offered []Secret
 	var offeredGit GitIdentity
 	if interactive {
 		offered = availableSecrets(h)
-		offeredGit = cmp.Or(hostGitIdentity(h, folder), cfg.Git)
+		offeredGit = cmp.Or(hostGitIdentity(h, projectPath), cfg.Git)
 	}
 	for {
 		if interactive {
@@ -122,20 +122,20 @@ func Run(opts Options) (Config, error) {
 	return cfg, nil
 }
 
-func resolveFolder(cwd, folder string) string {
-	if folder == "" {
+func resolveProjectPath(cwd, projectPath string) string {
+	if projectPath == "" {
 		return cwd
 	}
-	if !filepath.IsAbs(folder) {
-		folder = filepath.Join(cwd, folder)
+	if !filepath.IsAbs(projectPath) {
+		projectPath = filepath.Join(cwd, projectPath)
 	}
-	return filepath.Clean(folder)
+	return filepath.Clean(projectPath)
 }
 
-func defaults(h Host, folder string, s scan) Config {
+func defaults(h Host, projectPath string, s scan) Config {
 	return Config{
-		Folder: folder,
-		Name:   sanitizeName(filepath.Base(folder)),
+		ProjectPath: projectPath,
+		Name:        sanitizeName(filepath.Base(projectPath)),
 		Resources: Resources{
 			CPUs:          max(1, h.CPUs/2),
 			MemoryGiB:     max(1, min(h.MemoryGiB/2, h.MemoryGiB-hostReservedGiB)),
@@ -194,8 +194,8 @@ func sanitizeName(s string) string {
 
 func validate(cfg Config, h Host) error {
 	var errs []error
-	if st, err := os.Stat(cfg.Folder); err != nil || !st.IsDir() {
-		errs = append(errs, fmt.Errorf("folder %s is not a directory", cfg.Folder))
+	if st, err := os.Stat(cfg.ProjectPath); err != nil || !st.IsDir() {
+		errs = append(errs, fmt.Errorf("Project path %s is not a directory", cfg.ProjectPath))
 	}
 	switch {
 	case !validName.MatchString(cfg.Name):
@@ -223,13 +223,13 @@ func validate(cfg Config, h Host) error {
 			errs = append(errs, fmt.Errorf("unknown harness %q (supported: %s)", name, strings.Join(SupportedHarnesses, ", ")))
 		}
 	}
-	errs = append(errs, validateProject(cfg.Folder, cfg.Project)...)
+	errs = append(errs, validateProject(cfg.ProjectPath, cfg.Project)...)
 	return errors.Join(errs...)
 }
 
-func validateProject(folder string, p Project) []error {
+func validateProject(projectPath string, p Project) []error {
 	var errs []error
-	services, err := composeServices(folder, p.ComposeFiles)
+	services, err := composeServices(projectPath, p.ComposeFiles)
 	if err != nil {
 		return []error{err}
 	}
@@ -243,8 +243,8 @@ func validateProject(folder string, p Project) []error {
 	}
 	for _, f := range p.BringFiles {
 		if !filepath.IsLocal(f) {
-			errs = append(errs, fmt.Errorf("file to bring %q must be inside the Project folder", f))
-		} else if _, err := os.Stat(filepath.Join(folder, f)); err != nil {
+			errs = append(errs, fmt.Errorf("file to bring %q must be inside the Project", f))
+		} else if _, err := os.Stat(filepath.Join(projectPath, f)); err != nil {
 			errs = append(errs, fmt.Errorf("file to bring %q: %w", f, err))
 		}
 	}

@@ -17,17 +17,17 @@ const (
 	// LabelOrcasm marks a Sandbox as orcasm's. Its value is always "1": msb
 	// matches a bare `--label orcasm` selector against an empty value only.
 	LabelOrcasm = "orcasm"
-	// LabelFolder holds the Project folder on the host (absolute).
-	LabelFolder = "orcasm.folder"
+	// LabelProject holds the Project on the host (absolute).
+	LabelProject = "orcasm.project"
 	// LabelMain holds Main's absolute path in the guest.
 	LabelMain = "orcasm.main"
 )
 
 // CreateLabels returns the `--label` values to create a Sandbox with, for the
-// Project at folder (absolute, on the host) whose Main lives at main in the
+// Project at projectPath (absolute, on the host) whose Main lives at main in the
 // guest.
-func CreateLabels(folder, main string) []msb.Label {
-	return []msb.Label{{Key: LabelOrcasm, Value: "1"}, {Key: LabelFolder, Value: folder}, {Key: LabelMain, Value: main}}
+func CreateLabels(projectPath, main string) []msb.Label {
+	return []msb.Label{{Key: LabelOrcasm, Value: "1"}, {Key: LabelProject, Value: projectPath}, {Key: LabelMain, Value: main}}
 }
 
 // orcasmLabel selects the sandboxes orcasm made.
@@ -46,13 +46,13 @@ type MSB interface {
 
 // Sandbox is one of orcasm's Sandboxes as the host sees it.
 type Sandbox struct {
-	Name   string
-	Status msb.Status
-	Folder string // Project folder on the host
-	Main   string // Main's path in the guest
+	Name        string
+	Status      msb.Status
+	ProjectPath string // the Project's absolute path on the host
+	Main        string // Main's path in the guest
 }
 
-// Running reports whether the Sandbox's VM is up.
+// Running reports whether the Sandbox is up.
 func (s Sandbox) Running() bool { return s.Status == msb.Running }
 
 // SSHEntries drops a Sandbox's host SSH entry. sshaccess.Access implements it.
@@ -81,9 +81,9 @@ func (m Manager) List(ctx context.Context) ([]Sandbox, error) {
 	return m.list(ctx, orcasmLabel)
 }
 
-// InFolder returns the Sandboxes of the Project at folder (absolute).
-func (m Manager) InFolder(ctx context.Context, folder string) ([]Sandbox, error) {
-	return m.list(ctx, orcasmLabel, msb.Label{Key: LabelFolder, Value: folder})
+// InProject returns the Sandboxes of the Project at projectPath (absolute).
+func (m Manager) InProject(ctx context.Context, projectPath string) ([]Sandbox, error) {
+	return m.list(ctx, orcasmLabel, msb.Label{Key: LabelProject, Value: projectPath})
 }
 
 // Get returns the named Sandbox. A sandbox orcasm did not make is not one.
@@ -135,7 +135,7 @@ func (m Manager) list(ctx context.Context, labels ...msb.Label) ([]Sandbox, erro
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, Sandbox{Name: l.Name, Status: l.Status, Folder: labels[LabelFolder], Main: labels[LabelMain]})
+		out = append(out, Sandbox{Name: l.Name, Status: l.Status, ProjectPath: labels[LabelProject], Main: labels[LabelMain]})
 	}
 	slices.SortFunc(out, func(a, b Sandbox) int { return strings.Compare(a.Name, b.Name) })
 	return out, nil

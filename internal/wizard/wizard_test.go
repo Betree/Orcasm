@@ -68,11 +68,11 @@ func TestEmptyAnswersTakeDefaultsFromTheHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertConfig(t, cfg, wizard.Config{
-		Folder:    dir,
-		Name:      "my-app",
-		Resources: wizard.Resources{CPUs: 8, MemoryGiB: 16, RootDiskGiB: 32, DockerDiskGiB: 100},
-		HostPort:  6768,
-		Harnesses: []string{"claude", "codex"},
+		ProjectPath: dir,
+		Name:        "my-app",
+		Resources:   wizard.Resources{CPUs: 8, MemoryGiB: 16, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:    6768,
+		Harnesses:   []string{"claude", "codex"},
 	})
 }
 
@@ -107,7 +107,7 @@ func TestAnswersFileOverridesDefaults(t *testing.T) {
 	parent := filepath.Dir(cwd)
 	newProjectAt(t, filepath.Join(parent, "other"))
 	cfg, err := runWith(t, fakeHost(cwd), t.TempDir(), `
-folder = "../other"
+project_path = "../other"
 name = "custom"
 host_port = 7000
 harnesses = ["opencode"]
@@ -119,18 +119,18 @@ memory_gib = 4
 		t.Fatal(err)
 	}
 	assertConfig(t, cfg, wizard.Config{
-		Folder:    filepath.Join(parent, "other"),
-		Name:      "custom",
-		Resources: wizard.Resources{CPUs: 2, MemoryGiB: 4, RootDiskGiB: 32, DockerDiskGiB: 100},
-		HostPort:  7000,
-		Harnesses: []string{"opencode"},
+		ProjectPath: filepath.Join(parent, "other"),
+		Name:        "custom",
+		Resources:   wizard.Resources{CPUs: 2, MemoryGiB: 4, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:    7000,
+		Harnesses:   []string{"opencode"},
 	})
 }
 
 func TestNameDefaultsToTheChosenFolder(t *testing.T) {
 	cwd := newProject(t, "cwd")
 	other := newProjectAt(t, filepath.Join(filepath.Dir(cwd), "picked"))
-	cfg, err := runWith(t, fakeHost(cwd), t.TempDir(), `folder = "`+other+`"`)
+	cfg, err := runWith(t, fakeHost(cwd), t.TempDir(), `project_path = "`+other+`"`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,7 +152,7 @@ func TestRefusesAnExistingSandboxName(t *testing.T) {
 
 func TestRefusesInvalidAnswers(t *testing.T) {
 	for _, answers := range []string{
-		`folder = "/does/not/exist"`,
+		`project_path = "/does/not/exist"`,
 		`name = "has space"`,
 		`harnesses = ["vim"]`,
 		`host_port = 80`,
@@ -287,7 +287,7 @@ func TestProjectAnswersComeFromACommittedOrcasmToml(t *testing.T) {
 func TestInteractiveRunAcceptsDefaultsAndTakesTypedAnswers(t *testing.T) {
 	dir := newProject(t, "my-app")
 	var out strings.Builder
-	// Without a terminal the Wizard asks line by line. Answer: folder (keep),
+	// Without a terminal the Wizard asks line by line. Answer: projectPath (keep),
 	// name "typed", then keep every other default.
 	in := strings.NewReader("\ntyped\n" + strings.Repeat("\n", 20))
 	cfg, err := wizard.Run(wizard.Options{Host: fakeHost(dir), ConfigDir: t.TempDir(), In: in, Out: &out})
@@ -295,11 +295,11 @@ func TestInteractiveRunAcceptsDefaultsAndTakesTypedAnswers(t *testing.T) {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 	assertConfig(t, cfg, wizard.Config{
-		Folder:    dir,
-		Name:      "typed",
-		Resources: wizard.Resources{CPUs: 8, MemoryGiB: 16, RootDiskGiB: 32, DockerDiskGiB: 100},
-		HostPort:  6768,
-		Harnesses: []string{"claude", "codex"},
+		ProjectPath: dir,
+		Name:        "typed",
+		Resources:   wizard.Resources{CPUs: 8, MemoryGiB: 16, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:    6768,
+		Harnesses:   []string{"claude", "codex"},
 	})
 }
 
@@ -518,7 +518,7 @@ func TestInteractiveRunOffersTheHostsTokensAndGitIdentity(t *testing.T) {
 		"git -C " + dir + " config user.email": "ada@example.com\n",
 	})
 	var out strings.Builder
-	// Keep the folder, name, resources and port; confirm the harnesses (0);
+	// Keep the projectPath, name, resources and port; confirm the harnesses (0);
 	// then in the sharing question toggle option 2 (ANTHROPIC_API_KEY) and 3
 	// (git identity), leaving 1 (GH_TOKEN) out, and confirm.
 	in := strings.NewReader(strings.Repeat("\n", 7) + "0\n" + "2\n3\n0\n")

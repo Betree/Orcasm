@@ -16,7 +16,7 @@ import (
 	"github.com/Betree/Orcasm/internal/msb"
 )
 
-// NewHost probes the machine orcasm runs on.
+// NewHost probes the host orcasm runs on.
 func NewHost() (Host, error) {
 	cwd, err := os.Getwd()
 	if err != nil {

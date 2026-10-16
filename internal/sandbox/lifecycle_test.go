@@ -143,8 +143,8 @@ func names(sbs []sandbox.Sandbox) []string {
 
 func TestListShowsOnlyOrcasmSandboxes(t *testing.T) {
 	f := newFakeMSB()
-	f.add("app", msb.Running, "orcasm=1", "orcasm.folder=/home/me/app")
-	f.add("app-2", msb.Stopped, "orcasm=1", "orcasm.folder=/home/me/app")
+	f.add("app", msb.Running, "orcasm=1", "orcasm.project=/home/me/app")
+	f.add("app-2", msb.Stopped, "orcasm=1", "orcasm.project=/home/me/app")
 	f.add("oc-dev", msb.Running, "team=platform")
 
 	got, err := sandbox.Manager{MSB: f}.List(context.Background())
@@ -153,8 +153,8 @@ func TestListShowsOnlyOrcasmSandboxes(t *testing.T) {
 	}
 
 	want := []sandbox.Sandbox{
-		{Name: "app", Status: msb.Running, Folder: "/home/me/app"},
-		{Name: "app-2", Status: msb.Stopped, Folder: "/home/me/app"},
+		{Name: "app", Status: msb.Running, ProjectPath: "/home/me/app"},
+		{Name: "app-2", Status: msb.Stopped, ProjectPath: "/home/me/app"},
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("List = %+v, want %+v", got, want)
@@ -163,16 +163,16 @@ func TestListShowsOnlyOrcasmSandboxes(t *testing.T) {
 
 func TestInFolderFindsTheFoldersSandboxes(t *testing.T) {
 	f := newFakeMSB()
-	f.add("app", msb.Running, "orcasm=1", "orcasm.folder=/home/me/app")
-	f.add("other", msb.Running, "orcasm=1", "orcasm.folder=/home/me/other")
+	f.add("app", msb.Running, "orcasm=1", "orcasm.project=/home/me/app")
+	f.add("other", msb.Running, "orcasm=1", "orcasm.project=/home/me/other")
 
-	got, err := sandbox.Manager{MSB: f}.InFolder(context.Background(), "/home/me/app")
+	got, err := sandbox.Manager{MSB: f}.InProject(context.Background(), "/home/me/app")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	if !slices.Equal(names(got), []string{"app"}) {
-		t.Errorf("InFolder = %v, want [app]", names(got))
+		t.Errorf("InProject = %v, want [app]", names(got))
 	}
 }
 

@@ -58,12 +58,12 @@ func (f *fakeCreateMSB) ExecStreaming(_ context.Context, name, user string, out 
 
 func demoConfig() wizard.Config {
 	return wizard.Config{
-		Folder:    "/home/u/code/demo",
-		Name:      "demo",
-		Resources: wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
-		HostPort:  6769,
-		Harnesses: []string{"claude", "codex"},
-		Git:       wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
+		ProjectPath: "/home/u/code/demo",
+		Name:        "demo",
+		Resources:   wizard.Resources{CPUs: 4, MemoryGiB: 8, RootDiskGiB: 32, DockerDiskGiB: 100},
+		HostPort:    6769,
+		Harnesses:   []string{"claude", "codex"},
+		Git:         wizard.GitIdentity{Name: "Ada Lovelace", Email: "ada@example.com"},
 	}
 }
 
@@ -77,7 +77,7 @@ func TestProvisionCreatesTheSandboxFromTheWizardConfig(t *testing.T) {
 		Name:  "demo",
 		Labels: []msb.Label{
 			{Key: "orcasm", Value: "1"},
-			{Key: "orcasm.folder", Value: "/home/u/code/demo"},
+			{Key: "orcasm.project", Value: "/home/u/code/demo"},
 			{Key: "orcasm.main", Value: "/home/dev/demo"},
 			{Key: "orcasm.port", Value: "6769"},
 			{Key: "orcasm.schema", Value: "0"},

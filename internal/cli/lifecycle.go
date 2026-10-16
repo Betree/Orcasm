@@ -53,7 +53,7 @@ func newManager() (sandbox.Manager, error) {
 }
 
 // sandboxArg is the Sandbox named in args or, without one, the current
-// folder's only Sandbox.
+// Project's only Sandbox.
 func sandboxArg(ctx context.Context, m sandbox.Manager, args []string) (string, error) {
 	if len(args) == 1 {
 		return args[0], nil
@@ -62,7 +62,7 @@ func sandboxArg(ctx context.Context, m sandbox.Manager, args []string) (string, 
 	if err != nil {
 		return "", err
 	}
-	here, err := m.InFolder(ctx, cwd)
+	here, err := m.InProject(ctx, cwd)
 	if err != nil {
 		return "", err
 	}
@@ -77,7 +77,7 @@ func sandboxArg(ctx context.Context, m sandbox.Manager, args []string) (string, 
 }
 
 // sandboxCmd builds a command acting on one Sandbox, named or the current
-// folder's.
+// Project's.
 func sandboxCmd(use, short string, run func(cmd *cobra.Command, m sandbox.Manager, name string) error) *cobra.Command {
 	return &cobra.Command{
 		Use:   use + " [name]",
@@ -124,9 +124,9 @@ func printSandboxes(out io.Writer, sbs []sandbox.Sandbox) {
 		return
 	}
 	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME\tSTATUS\tFOLDER")
+	fmt.Fprintln(w, "NAME\tSTATUS\tPROJECT")
 	for _, s := range sbs {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, strings.ToLower(string(s.Status)), s.Folder)
+		fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, strings.ToLower(string(s.Status)), s.ProjectPath)
 	}
 	w.Flush()
 }

@@ -41,7 +41,7 @@ rm -rf /home/dev/main && mkdir /home/dev/main && cd /home/dev/main &&
 git init -q -b main && echo v1 > README && git add . &&
 git -c user.name=t -c user.email=t@t commit -q -m first && chown -R dev:dev /home/dev/main`)
 	// Provisioning would have set these labels at create time.
-	for _, l := range []string{"orcasm.main=/home/dev/main", "orcasm.folder=" + t.TempDir()} {
+	for _, l := range []string{"orcasm.main=/home/dev/main", "orcasm.project=" + t.TempDir()} {
 		if out, err := exec.Command("msb", "modify", name, "--restart", "--label", l).CombinedOutput(); err != nil {
 			t.Fatalf("msb modify: %v: %s", err, out)
 		}

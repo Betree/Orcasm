@@ -43,7 +43,7 @@ func TestCreateProvisionsTheSandboxFromTheWizardConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	answers := filepath.Join(t.TempDir(), "answers.toml")
-	content := "folder = \"" + project + "\"\nname = \"orcasm-cli-test-sandbox\"\nhost_port = 16999\nharnesses = [\"codex\"]\n"
+	content := "project_path = \"" + project + "\"\nname = \"orcasm-cli-test-sandbox\"\nhost_port = 16999\nharnesses = [\"codex\"]\n"
 	if err := os.WriteFile(answers, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestCreateProvisionsTheSandboxFromTheWizardConfig(t *testing.T) {
 		t.Fatalf("want one Sandbox provisioned, got %d", len(*provisioned))
 	}
 	cfg := (*provisioned)[0]
-	if cfg.Name != "orcasm-cli-test-sandbox" || cfg.Folder != project || cfg.HostPort != 16999 || !reflect.DeepEqual(cfg.Harnesses, []string{"codex"}) {
+	if cfg.Name != "orcasm-cli-test-sandbox" || cfg.ProjectPath != project || cfg.HostPort != 16999 || !reflect.DeepEqual(cfg.Harnesses, []string{"codex"}) {
 		t.Errorf("provisioned %+v", cfg)
 	}
 	if !strings.Contains(out, "http://127.0.0.1:16999/") {
@@ -76,7 +76,7 @@ func TestCreateWithAnswersFileRunsTheWizardWithoutPrompting(t *testing.T) {
 		t.Fatal(err)
 	}
 	answers := filepath.Join(t.TempDir(), "answers.toml")
-	content := "folder = \"" + project + "\"\nname = \"orcasm-cli-test-sandbox\"\nharnesses = []\n"
+	content := "project_path = \"" + project + "\"\nname = \"orcasm-cli-test-sandbox\"\nharnesses = []\n"
 	if err := os.WriteFile(answers, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestCreatePrintsApprovedSecretsAsSpecsWithoutTheirValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	answers := filepath.Join(t.TempDir(), "answers.toml")
-	content := "folder = \"" + project + "\"\nname = \"orcasm-cli-test-sandbox\"\nharnesses = []\n" +
+	content := "project_path = \"" + project + "\"\nname = \"orcasm-cli-test-sandbox\"\nharnesses = []\n" +
 		"[[secrets]]\nname = \"ANTHROPIC_API_KEY\"\n"
 	if err := os.WriteFile(answers, []byte(content), 0o644); err != nil {
 		t.Fatal(err)

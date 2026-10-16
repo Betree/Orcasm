@@ -11,7 +11,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// scan is what the Wizard reads from the Project folder to offer choices.
+// scan is what the Wizard reads from the Project to offer choices.
 type scan struct {
 	// composeFiles are the Compose-looking files at the Project root.
 	composeFiles []string
@@ -31,10 +31,10 @@ var standardComposeFiles = [][2]string{
 	{"docker-compose.yml", "docker-compose.override.yml"},
 }
 
-func scanProject(folder string) scan {
+func scanProject(projectPath string) scan {
 	var s scan
 	for _, pattern := range []string{"*compose*.yaml", "*compose*.yml"} {
-		matches, _ := filepath.Glob(filepath.Join(folder, pattern))
+		matches, _ := filepath.Glob(filepath.Join(projectPath, pattern))
 		for _, m := range matches {
 			s.composeFiles = append(s.composeFiles, filepath.Base(m))
 		}
@@ -49,7 +49,7 @@ func scanProject(folder string) scan {
 			break
 		}
 	}
-	out, err := exec.Command("git", "-C", folder, "ls-files", "--others", "--ignored",
+	out, err := exec.Command("git", "-C", projectPath, "ls-files", "--others", "--ignored",
 		"--exclude-standard", "--directory", "--no-empty-directory").Output()
 	if err == nil {
 		for line := range strings.Lines(string(out)) {
@@ -74,10 +74,10 @@ func (s scan) defaultBringFiles() []string {
 }
 
 // composeServices lists the services defined across the given Compose files.
-func composeServices(folder string, files []string) ([]string, error) {
+func composeServices(projectPath string, files []string) ([]string, error) {
 	var services []string
 	for _, f := range files {
-		data, err := os.ReadFile(filepath.Join(folder, f))
+		data, err := os.ReadFile(filepath.Join(projectPath, f))
 		if err != nil {
 			return nil, fmt.Errorf("compose file %s: %w", f, err)
 		}
