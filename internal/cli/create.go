@@ -28,7 +28,11 @@ var create = func(ctx context.Context, cfg wizard.Config, secretValue sandbox.Se
 	if err != nil {
 		return err
 	}
-	return sandbox.NewCreator(msb.CLI{}, ssh, secretValue, dir).Create(ctx, cfg, out)
+	guestBinary, err := sandbox.GuestBinary()
+	if err != nil {
+		return err
+	}
+	return sandbox.NewCreator(msb.CLI{}, ssh, secretValue, dir, guestBinary).Create(ctx, cfg, out)
 }
 
 func newCreateCmd(BuildInfo) *cobra.Command {
