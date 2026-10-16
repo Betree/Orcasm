@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -41,7 +42,27 @@ func NewHost() (Host, error) {
 			return slices.Contains(names, name)
 		},
 		FirstFreePort: hostport.FirstFree,
+		Getenv:        os.Getenv,
+		Output: func(name string, args ...string) (string, error) {
+			out, err := exec.Command(name, args...).Output()
+			return string(out), err
+		},
+		OpenCodeAuthFile: openCodeAuthFile(),
 	}, nil
+}
+
+// openCodeAuthFile is where OpenCode keeps its credentials (XDG data dir on
+// every OS), or "" without a home.
+func openCodeAuthFile() string {
+	data := os.Getenv("XDG_DATA_HOME")
+	if data == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		data = filepath.Join(home, ".local", "share")
+	}
+	return filepath.Join(data, "opencode", "auth.json")
 }
 
 // memoryGiB is the host's total memory, rounded to the nearest GiB.
