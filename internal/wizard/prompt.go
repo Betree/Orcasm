@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/charmbracelet/huh"
 	"golang.org/x/term"
@@ -111,7 +112,55 @@ func (p prompter) sandbox(cfg *Config, h Host, s scan) error {
 	return p.run(huh.NewGroup(project...))
 }
 
+// gitOption is the sharing choice for the git identity; the others are
+// Secret names.
+const gitOption = "git identity"
+
+// share asks which of the host's tokens and git identity to hand to the
+// Sandbox, pre-selected with the current answers.
+func (p prompter) share(cfg *Config, secrets []Secret, git GitIdentity) error {
+	var options []huh.Option[string]
+	for _, s := range secrets {
+		options = append(options, huh.NewOption(
+			fmt.Sprintf("%s from %s, sent only to %s", s.Name, s.Source, strings.Join(s.Hosts, ", ")), s.Name))
+	}
+	if git != (GitIdentity{}) {
+		options = append(options, huh.NewOption(fmt.Sprintf("git identity: %s <%s>", git.Name, git.Email), gitOption))
+	}
+	if len(options) == 0 {
+		return nil
+	}
+	var picked []string
+	for _, s := range cfg.Secrets {
+		picked = append(picked, s.Name)
+	}
+	if cfg.Git != (GitIdentity{}) {
+		picked = append(picked, gitOption)
+	}
+	err := p.run(huh.NewGroup(huh.NewMultiSelect[string]().
+		Title("Share with the Sandbox").
+		Description("Agents only see placeholders for tokens; the real value is added on requests to the listed hosts.").
+		Options(options...).Value(&picked)))
+	if err != nil {
+		return err
+	}
+	cfg.Secrets, cfg.Git = []Secret{}, GitIdentity{}
+	for _, name := range picked {
+		if name == gitOption {
+			cfg.Git = git
+		} else {
+			cfg.Secrets = append(cfg.Secrets, Secret{Name: name})
+		}
+	}
+	return nil
+}
+
+// isInt accepts a number, or nothing: in line-by-line mode an empty answer
+// keeps the default, and an emptied field otherwise fails validation.
 func isInt(v string) error {
+	if v == "" {
+		return nil
+	}
 	if _, err := strconv.Atoi(v); err != nil {
 		return fmt.Errorf("enter a number")
 	}

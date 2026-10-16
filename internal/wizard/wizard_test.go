@@ -1,6 +1,7 @@
 package wizard_test
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -316,5 +317,223 @@ func TestRefusesABusyHostPort(t *testing.T) {
 	h.FirstFreePort = func(start int) (int, error) { return start + 1, nil }
 	if _, err := runWith(t, h, t.TempDir(), `host_port = 7000`); err == nil {
 		t.Fatal("want an error for a busy port")
+	}
+}
+
+// withEnv makes the fake host's environment hold exactly env.
+func withEnv(h wizard.Host, env map[string]string) wizard.Host {
+	h.Getenv = func(k string) string { return env[k] }
+	return h
+}
+
+func TestApprovedAPIKeyFromTheEnvironmentBecomesAHostScopedSecret(t *testing.T) {
+	h := withEnv(fakeHost(newProject(t, "app")), map[string]string{"ANTHROPIC_API_KEY": "sk-ant-real"})
+	cfg, err := runWith(t, h, t.TempDir(), "[[secrets]]\nname = \"ANTHROPIC_API_KEY\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []wizard.Secret{{
+		Name:   "ANTHROPIC_API_KEY",
+		Hosts:  []string{"api.anthropic.com"},
+		Source: wizard.Source{Env: "ANTHROPIC_API_KEY"},
+	}}
+	if !reflect.DeepEqual(cfg.Secrets, want) {
+		t.Fatalf("got  %+v\nwant %+v", cfg.Secrets, want)
+	}
+	if v, err := h.SecretValue(cfg.Secrets[0]); err != nil || v != "sk-ant-real" {
+		t.Fatalf("got value %q (%v), want the host's key", v, err)
+	}
+}
+
+func TestTokensFoundOnTheHostAreNotSharedWithoutApproval(t *testing.T) {
+	h := withEnv(fakeHost(newProject(t, "app")), map[string]string{"ANTHROPIC_API_KEY": "sk-ant-real"})
+	cfg, err := runWith(t, h, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Secrets) != 0 {
+		t.Fatalf("got secrets %+v, want none", cfg.Secrets)
+	}
+}
+
+// withCommands makes the fake host's commands print the given output (keyed
+// by the command line); any other command fails.
+func withCommands(h wizard.Host, outputs map[string]string) wizard.Host {
+	h.Output = func(name string, args ...string) (string, error) {
+		line := strings.Join(append([]string{name}, args...), " ")
+		if out, ok := outputs[line]; ok {
+			return out, nil
+		}
+		return "", fmt.Errorf("%s: not found", line)
+	}
+	return h
+}
+
+func TestApprovedGitHubCLITokenIsScopedToGitHub(t *testing.T) {
+	h := withCommands(fakeHost(newProject(t, "app")), map[string]string{"gh auth token": "gho_real\n"})
+	cfg, err := runWith(t, h, t.TempDir(), "[[secrets]]\nname = \"GH_TOKEN\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []wizard.Secret{{
+		Name:   "GH_TOKEN",
+		Hosts:  []string{"github.com", "api.github.com", "uploads.github.com"},
+		Source: wizard.Source{Command: []string{"gh", "auth", "token"}},
+	}}
+	if !reflect.DeepEqual(cfg.Secrets, want) {
+		t.Fatalf("got  %+v\nwant %+v", cfg.Secrets, want)
+	}
+	if v, err := h.SecretValue(cfg.Secrets[0]); err != nil || v != "gho_real" {
+		t.Fatalf("got value %q (%v), want the gh token", v, err)
+	}
+}
+
+func TestApprovingATokenTheHostDoesNotHaveFails(t *testing.T) {
+	h := fakeHost(newProject(t, "app"))
+	for _, name := range []string{"GH_TOKEN", "ANTHROPIC_API_KEY", "MADE_UP"} {
+		if _, err := runWith(t, h, t.TempDir(), "[[secrets]]\nname = \""+name+"\"\n"); err == nil {
+			t.Errorf("want an error approving %s", name)
+		}
+	}
+}
+
+// withOpenCodeAuth gives the fake host an OpenCode auth.json.
+func withOpenCodeAuth(t *testing.T, h wizard.Host, content string) wizard.Host {
+	h.OpenCodeAuthFile = writeFile(t, filepath.Join(t.TempDir(), "auth.json"), content)
+	return h
+}
+
+const openCodeAuth = `{
+  "openrouter": {"type": "api", "key": "sk-or-real"},
+  "anthropic": {"type": "api", "key": "sk-ant-from-opencode"},
+  "openai": {"type": "oauth", "access": "at", "refresh": "rt", "expires": 1}
+}`
+
+func TestAPIKeysStoredByOpenCodeCanBeShared(t *testing.T) {
+	h := withOpenCodeAuth(t, fakeHost(newProject(t, "app")), openCodeAuth)
+	cfg, err := runWith(t, h, t.TempDir(), "[[secrets]]\nname = \"OPENROUTER_API_KEY\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []wizard.Secret{{
+		Name:   "OPENROUTER_API_KEY",
+		Hosts:  []string{"openrouter.ai"},
+		Source: wizard.Source{OpenCodeAuth: "openrouter"},
+	}}
+	if !reflect.DeepEqual(cfg.Secrets, want) {
+		t.Fatalf("got  %+v\nwant %+v", cfg.Secrets, want)
+	}
+	if v, err := h.SecretValue(cfg.Secrets[0]); err != nil || v != "sk-or-real" {
+		t.Fatalf("got value %q (%v), want the OpenCode key", v, err)
+	}
+}
+
+func TestOpenCodeSubscriptionLoginsAreNeverShared(t *testing.T) {
+	h := withOpenCodeAuth(t, fakeHost(newProject(t, "app")), openCodeAuth)
+	if _, err := runWith(t, h, t.TempDir(), "[[secrets]]\nname = \"OPENAI_API_KEY\"\n"); err == nil {
+		t.Fatal("want an error: OpenCode only holds an OAuth login for openai")
+	}
+}
+
+func TestEnvironmentKeyIsPreferredOverOpenCodes(t *testing.T) {
+	h := withOpenCodeAuth(t, fakeHost(newProject(t, "app")), openCodeAuth)
+	h = withEnv(h, map[string]string{"ANTHROPIC_API_KEY": "sk-ant-env"})
+	cfg, err := runWith(t, h, t.TempDir(), "[[secrets]]\nname = \"ANTHROPIC_API_KEY\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Secrets[0].Source; !reflect.DeepEqual(got, wizard.Source{Env: "ANTHROPIC_API_KEY"}) {
+		t.Fatalf("got source %+v, want the environment", got)
+	}
+}
+
+func TestApprovalsAreRememberedButTokenValuesAreNeverSaved(t *testing.T) {
+	dir := newProject(t, "app")
+	h := withEnv(fakeHost(dir), map[string]string{"ANTHROPIC_API_KEY": "sk-ant-real"})
+	h = withCommands(h, map[string]string{"gh auth token": "gho_real"})
+	configDir := t.TempDir()
+	first, err := runWith(t, h, configDir, "[[secrets]]\nname = \"GH_TOKEN\"\n[[secrets]]\nname = \"ANTHROPIC_API_KEY\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{filepath.Join(dir, "orcasm.toml"), filepath.Join(configDir, "config.toml")} {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "sk-ant-real") || strings.Contains(string(data), "gho_real") {
+			t.Fatalf("%s holds a token value:\n%s", f, data)
+		}
+	}
+	second, err := runWith(t, h, configDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(second.Secrets, first.Secrets) {
+		t.Fatalf("got  %+v\nwant %+v", second.Secrets, first.Secrets)
+	}
+}
+
+func TestRememberedApprovalForATokenNoLongerOnTheHostIsDropped(t *testing.T) {
+	dir := newProject(t, "app")
+	configDir := t.TempDir()
+	h := withEnv(fakeHost(dir), map[string]string{"ANTHROPIC_API_KEY": "sk-ant-real"})
+	if _, err := runWith(t, h, configDir, "[[secrets]]\nname = \"ANTHROPIC_API_KEY\"\n"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := runWith(t, fakeHost(dir), configDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Secrets) != 0 {
+		t.Fatalf("got secrets %+v, want none", cfg.Secrets)
+	}
+}
+
+func TestGitIdentityIsAnAnswerRememberedForNextTime(t *testing.T) {
+	dir := newProject(t, "app")
+	configDir := t.TempDir()
+	first, err := runWith(t, fakeHost(dir), configDir, "[git]\nname = \"Ada\"\nemail = \"ada@example.com\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (wizard.GitIdentity{Name: "Ada", Email: "ada@example.com"}); first.Git != want {
+		t.Fatalf("got %+v, want %+v", first.Git, want)
+	}
+	second, err := runWith(t, fakeHost(dir), configDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Git != first.Git {
+		t.Fatalf("got %+v, want %+v", second.Git, first.Git)
+	}
+}
+
+func TestInteractiveRunOffersTheHostsTokensAndGitIdentity(t *testing.T) {
+	dir := newProject(t, "my-app")
+	h := withEnv(fakeHost(dir), map[string]string{"ANTHROPIC_API_KEY": "sk-ant-real"})
+	h = withCommands(h, map[string]string{
+		"gh auth token":                        "gho_real",
+		"git -C " + dir + " config user.name":  "Ada\n",
+		"git -C " + dir + " config user.email": "ada@example.com\n",
+	})
+	var out strings.Builder
+	// Keep the folder, name, resources and port; confirm the harnesses (0);
+	// then in the sharing question toggle option 2 (ANTHROPIC_API_KEY) and 3
+	// (git identity), leaving 1 (GH_TOKEN) out, and confirm.
+	in := strings.NewReader(strings.Repeat("\n", 7) + "0\n" + "2\n3\n0\n")
+	cfg, err := wizard.Run(wizard.Options{Host: h, ConfigDir: t.TempDir(), In: in, Out: &out})
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	if !strings.Contains(out.String(), "GH_TOKEN") {
+		t.Fatalf("want the gh token offered:\n%s", out.String())
+	}
+	want := []wizard.Secret{{Name: "ANTHROPIC_API_KEY", Hosts: []string{"api.anthropic.com"}, Source: wizard.Source{Env: "ANTHROPIC_API_KEY"}}}
+	if !reflect.DeepEqual(cfg.Secrets, want) {
+		t.Fatalf("got  %+v\nwant %+v\n%s", cfg.Secrets, want, out.String())
+	}
+	if want := (wizard.GitIdentity{Name: "Ada", Email: "ada@example.com"}); cfg.Git != want {
+		t.Fatalf("got %+v, want %+v", cfg.Git, want)
 	}
 }
