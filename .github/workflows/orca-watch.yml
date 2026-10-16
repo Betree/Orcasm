@@ -7,6 +7,19 @@
 # the entry records that release as the oldest orcasm the Orca passed with.
 # A failure opens an issue; while it is open, that Orca is not retried with
 # that orcasm. Close it (or publish an orcasm release) to try again.
+#
+# The suite (e2e.yml) runs from main against that release's binary, so a
+# release older than the suite is still tested; the Sandbox is created with
+# the newest listed Orca and upgraded to the new one.
+#
+# Repository settings this needs, since mark-tested pushes to main with
+# GITHUB_TOKEN:
+# - Settings > Actions > General > Workflow permissions: "Read and write"
+#   (or at least not capped below the contents: write the job asks for).
+# - main must accept that push: no branch protection rule or ruleset on main
+#   requiring pull requests or status checks, unless it lets GitHub Actions
+#   bypass it (a ruleset bypass for the "GitHub Actions" app). Otherwise the
+#   push is rejected and mark-tested fails, saying so.
 name: orca-watch
 
 on:
@@ -113,7 +126,8 @@ jobs:
       # A direct commit to main, as ADR 0006 has CI update the file: the
       # change is data only, already validated by compatfile, and a PR would
       # wait for a human while users keep the older Orca. Pushed with
-      # GITHUB_TOKEN, it triggers no other workflow.
+      # GITHUB_TOKEN, it triggers no other workflow. It needs main to accept
+      # pushes from GitHub Actions (see the repository settings above).
       - name: Commit the compatibility file
         env:
           ORCA: ${{ needs.detect.outputs.orca }}
@@ -136,7 +150,7 @@ jobs:
             git fetch -q origin main
             git reset -q --hard origin/main
           done
-          echo "Could not push to main." >&2
+          echo "::error::Could not push to main. If the push was rejected, let GitHub Actions push to main: see the repository settings at the top of orca-watch.yml." >&2
           exit 1
       - name: Close earlier failure issues for this Orca
         env:
